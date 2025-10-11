@@ -1,0 +1,32 @@
+<VRTDataset rasterXSize="34721" rasterYSize="15103">
+  <SRS dataAxisToSRSAxisMapping="2,1">GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AXIS["Latitude",NORTH],AXIS["Longitude",EAST],AUTHORITY["EPSG","4326"]]</SRS>
+  <GeoTransform>  5.8619917691380383e+00,  5.3485822830229941e-04,  0.0000000000000000e+00,  4.8039135611344818e+01,  0.0000000000000000e+00, -5.3485822830229941e-04</GeoTransform>
+  <VRTRasterBand dataType="Float32" band="1">
+    <NoDataValue>nan</NoDataValue>
+    <ColorInterp>Gray</ColorInterp>
+    <ComplexSource>
+      <SourceFilename relativeToVRT="0">/Users/satyamshah/32T_20220101-20230101.tif_switzerland.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SourceProperties RasterXSize="7704" RasterYSize="3353" DataType="Float32" BlockXSize="7704" BlockYSize="1" />
+      <SrcRect xOff="0" yOff="0" xSize="7704" ySize="3353" />
+      <DstRect xOff="0" yOff="431.818122884759" xSize="8720.28740764153" ySize="3795.31719597898" />
+      <NODATA>nan</NODATA>
+    </ComplexSource>
+    <ComplexSource>
+      <SourceFilename relativeToVRT="0">/Users/satyamshah/33T_20220101-20230101.tif_switzerland.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SourceProperties RasterXSize="13742" RasterYSize="16170" DataType="Float32" BlockXSize="13742" BlockYSize="1" />
+      <SrcRect xOff="0" yOff="0" xSize="13742" ySize="16169.515789494" />
+      <DstRect xOff="10667.4149852792" yOff="0" xSize="12835.599327894" ySize="15103" />
+      <NODATA>nan</NODATA>
+    </ComplexSource>
+    <ComplexSource>
+      <SourceFilename relativeToVRT="0">/Users/satyamshah/34T_20220101-20230101.tif_switzerland.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SourceProperties RasterXSize="13742" RasterYSize="16170" DataType="Float32" BlockXSize="13742" BlockYSize="1" />
+      <SrcRect xOff="0" yOff="0" xSize="13742" ySize="16169.515789494" />
+      <DstRect xOff="21885.3409374417" yOff="0" xSize="12835.599327894" ySize="15103" />
+      <NODATA>nan</NODATA>
+    </ComplexSource>
+  </VRTRasterBand>
+</VRTDataset>
