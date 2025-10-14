@@ -1,0 +1,5867 @@
+---
+title: "servertrial"
+author: "Satyam Shah"
+date: "2025-04-16"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+# Universal setup chunk: load all required libraries before any other code
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(FedData)
+library(RColorBrewer)
+library(automap)
+library(conflicted)
+library(dplyr)
+library(flowdem)
+library(forcats)
+library(ggplot2)
+library(gstat)
+library(lubridate)
+library(mapsf)
+library(mapview)
+library(raster)
+library(sf)
+library(sfdep)
+library(sp)
+library(spatstat)
+library(spdep)
+library(stars)
+library(terra)
+library(tidycensus)
+library(tidyr)
+library(tidyverse)
+library(tigris)
+library(viridis)
+library(viridisLite)
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+# I created this map to explore the spatial patterns in the data.
+
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)              # For vector data operations
+library(terra)           # For raster data operations
+library(stars)           # For integrating raster data with sf
+library(tidyverse)       # For data manipulation
+library(mapsf)           # For mapping with a similar style to the practical PDFs
+library(mapview)         # Quick interactive map view
+library(RColorBrewer)    # For color palettes
+library(gstat)           # For spatial interpolation (IDW, kriging)
+library(automap)         # For automated variogram modeling and kriging
+library(flowdem)         # For hydrological processing (if needed)
+library(spdep)           # For spatial dependency analysis
+library(sfdep)           # For spatial autocorrelation using sf objects
+library(lubridate)       # For handling temporal information
+```
+
+
+
+
+
+
+```{r}
+# I am loading pipeline accident data from blackboard
+pipeline <- read.csv("~/Assignment/pipeline.csv")
+
+# I am checking the structure of the data 
+str(pipeline)
+head(pipeline)
+
+# Now I am trying to check column names to identify state field
+colnames(pipeline)
+```
+
+
+
+```{r}
+library(dplyr)
+
+# I am going to filter for Ohio from the data
+ohio_accidents <- pipeline %>%
+  dplyr::filter(toupper(State) %in% c("OHIO", "OH"))
+
+# Trying to check the number of Ohio accidents we have
+nrow(ohio_accidents)
+
+# Printing  a summary of the  accidents
+summary(ohio_accidents)
+
+
+head(ohio_accidents)
+
+```
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(dplyr)
+library(lubridate)
+library(sf)
+
+# Just trying to convert Date format for ease of processing later
+ohio_accidents$Date <- dmy(ohio_accidents$Date)
+
+# I am cleaning the data by removing occurences with invalid or missing coordinates
+ohio_accidents_clean <- ohio_accidents %>%
+  dplyr::filter(Longitude < 0) %>%  # Trying to get rid of positive longitudes (should be negative in US)
+  dplyr::filter(Longitude > -85 & Longitude < -80) %>%  # Adding Ohio longitude range
+  dplyr::filter(Latitude > 38 & Latitude < 42)  # Adding latitude range then
+
+nrow(ohio_accidents_clean)
+
+# Then moving to conversion to sf object
+ohio_accidents_sf <- st_as_sf(
+  ohio_accidents_clean, 
+  coords = c("Longitude", "Latitude"),
+  crs = 4326  # WGS84 coordinate system
+)
+
+head(ohio_accidents_sf)
+
+# Load necessary libraries
+library(sf)
+library(mapsf)
+
+# First, let's transform our data to a geographic CRS (WGS84) for lat/long display
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,  # Turn off automatic axes
+     main = "Pipeline Accidents in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels nicely (degrees symbol)
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Now add Ohio boundary
+plot(st_geometry(ohio_boundary_geo), 
+     col = "white", 
+     border = "black",
+     add = TRUE)
+
+# Add accident points
+plot(st_geometry(ohio_accidents_geo), 
+     col = "red", 
+     pch = 16, 
+     cex = 0.8,
+     add = TRUE)
+
+# Add manual axes with latitude/longitude labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# 5) Scale bar
+mf_scale(
+  pos = "bottomleft"
+)
+
+
+# Add box around the plot area
+box()
+
+```
+
+
+```{r}
+
+# Using my manually downloaded Census and Ohio shapefile:
+ohio_boundary <- 
+  st_read("~/Assignment/cb_2018_us_state_500k/cb_2018_us_state_500k.shp") %>%
+  dplyr::filter(NAME == "Ohio") %>%   
+  st_transform(26917)                
+
+
+```
+
+```{r}
+st_crs(ohio_accidents_sf)
+st_crs(waterbody_buffer_100m)
+st_crs(flowline_buffer_100m)
+
+```
+
+```{r}
+ohio_accidents_sf <- st_transform(ohio_accidents_sf, 26917)
+
+```
+
+
+
+```{r}
+# I am attempting to create buffers around water features
+# Waterbody is one feature and Water Flowline another
+waterbody_buffer_100m <- st_buffer(nhd_waterbodies_proj, 100)
+flowline_buffer_100m <- st_buffer(nhd_flowline_proj_clean, 100)
+
+# Then I am finding accidents near both water resources
+accidents_near_waterbodies <- st_intersects(ohio_accidents_sf, waterbody_buffer_100m, sparse = FALSE)
+accidents_near_flowlines <- st_intersects(ohio_accidents_sf, flowline_buffer_100m, sparse = FALSE)
+```
+
+
+
+```{r}
+
+
+ohio_boundary <- 
+  st_read("~/Assignment/cb_2018_us_state_500k/cb_2018_us_state_500k.shp") %>%
+  dplyr::filter(NAME == "Ohio") %>%   # explicitly dplyr::filter()
+  st_transform(26917)
+
+
+# I am transforming my accident data to the same projection
+ohio_accidents_sf <- st_transform(ohio_accidents_sf, 26917)
+
+# then loading water resources data
+nhd_waterbodies <- st_read("~/Assignment/NHDWaterbody.shp")
+nhd_flowline <- st_read("~/Assignment/NHDFlowline_1.shp")
+
+# then transforming the water resources  to the same projection
+nhd_waterbodies_proj <- st_transform(nhd_waterbodies, 26917)
+nhd_flowline_proj <- st_transform(nhd_flowline, 26917)
+
+# Since Flowline data had Z/M field , I am 
+# cleaning the flowline data by getting rid of Z/M
+
+nhd_flowline_proj_clean <- st_zm(nhd_flowline_proj, drop = TRUE, what = "ZM")
+
+# Then I am loading my NLCD land cover data
+nlcd_path <- "~/Assignment/nlcd_api_download/nlcd_ohio_api_clipped.tif"
+nlcd <- rast(nlcd_path)
+
+
+
+```
+
+```{r}
+# Point Pattern Analysis
+library(spatstat)
+
+# I am creating a spatial window for point pattern analysis using Ohio boundary
+ohio_win <- as.owin(st_geometry(ohio_boundary))
+
+# then converting Ohio accident points to ppp format
+ohio_pts <- st_coordinates(ohio_accidents_sf)
+ohio_ppp <- ppp(ohio_pts[,1], ohio_pts[,2], window = ohio_win)
+
+# then conducting a test for Complete Spatial Randomness (CSR)
+# Nearest Neighbor Analysis
+nn_test <- clarkevans.test(ohio_ppp)
+print(nn_test)
+
+# I am implementing Ripley's K function to check clustering at multiple distances
+k_ohio <- Kest(ohio_ppp, correction = "border")
+plot(k_ohio, main="Ripley's K Function: Ohio Pipeline Accidents")
+
+# Then  doing a Kernel Density Estimation
+ohio_density <- density.ppp(ohio_ppp, sigma = 10000)  # 10km bandwidth
+
+library(sf)
+library(spatstat)   # for ppp & density.ppp
+library(sp)         # for CRS()/proj4string()
+library(terra)      # for SpatRaster
+library(mapsf)      # for the mapping functions
+library(raster)     # for raster operations
+
+# 1) build the point pattern & 5 km KDE in UTM --------------------------------
+ohio_utm     <- st_transform(ohio_boundary, 26917)
+ohio_acc_utm <- st_transform(ohio_accidents_sf, 26917)
+ohio_win <- as.owin(st_geometry(ohio_utm))
+coords   <- st_coordinates(ohio_acc_utm)
+suppressWarnings({
+  ohio_ppp <- ppp(coords[,1], coords[,2], window = ohio_win, check = FALSE)
+})
+ohio_density <- density.ppp(ohio_ppp, sigma = 5000, edge = TRUE)
+
+# 2) get back to geographic for sf plotting ----------------------------------
+ohio_bound_geo <- st_transform(ohio_boundary, 4326)
+ohio_acc_geo   <- st_transform(ohio_accidents_sf, 4326)
+
+# 3) convert the KDE ("im" object) into a terra SpatRaster -------------------
+sgdf <- as(ohio_density, "SpatialGridDataFrame")
+proj4string(sgdf) <- st_crs(26917)$proj4string   # tell it "this is UTM"
+
+# Convert to a raster object (raster package) for better control
+r <- raster(sgdf)
+
+# Apply log transformation to match the reference map
+r_log <- calc(r, fun = function(x) log10(x * 100 + 1))
+
+# Project to WGS84
+r_wgs84 <- projectRaster(r_log, crs = st_crs(4326)$proj4string)
+
+# Create a mask from Ohio to constrain the KDE display
+ohio_sp <- as(ohio_bound_geo, "Spatial")
+r_masked <- mask(r_wgs84, ohio_sp)
+
+# 4) colour ramp --------------------------------------------------------------
+density_cols <- colorRampPalette(
+  c("navy", "blue", "purple", "red", "orange", "yellow")
+)(100)
+
+# 5) draw the map with base R for better control -----------------------------
+# Set margins to match reference
+par(mar = c(3, 3, 2, 6))  # room for right-hand legend & title
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_bound_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_bound_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 1), "°W")
+lat_labels <- paste0(round(lat_breaks, 1), "°N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Fill Ohio with white as the base layer
+plot(st_geometry(ohio_bound_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Plot the masked raster directly - the simpler approach that works
+plot(r_masked, 
+     col = density_cols, 
+     add = TRUE, 
+     legend = FALSE)
+
+# Add Ohio boundary again with a clean black line
+plot(st_geometry(ohio_bound_geo),
+     col = NA,
+     border = "black",
+     lwd = 1,
+     add = TRUE)
+
+# Add accident points
+plot(st_geometry(ohio_acc_geo),
+     col = "red",
+     pch = 16,
+     cex = 0.7,
+     add = TRUE)
+
+# Add title and subtitle separately for better control
+title("Kernel Density of Pipeline Accidents in Ohio", cex.main = 1.2)
+mtext("Smoothed with 5km Gaussian Kernel (log scale)", 
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow (using mapsf)
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar (using mapsf)
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create the tick-style legend
+par(xpd = TRUE)  # Allow plotting outside the plot region
+
+# Calculate legend position based on the plot dimensions
+usr <- par("usr")  # Get the plot region coordinates
+legend_x <- usr[2] + 0.05 * (usr[2] - usr[1])
+legend_y_bottom <- usr[3] + 0.25 * (usr[4] - usr[3])
+legend_y_top <- usr[3] + 0.75 * (usr[4] - usr[3])
+legend_width <- 0.02 * (usr[2] - usr[1])
+
+# Draw the legend color bar
+y_positions <- seq(legend_y_bottom, legend_y_top, length.out = 101)
+for (i in 1:100) {
+  rect(legend_x, y_positions[i], legend_x + legend_width, y_positions[i+1],
+       col = density_cols[i], border = NA)
+}
+
+# Add a border around the color bar
+rect(legend_x, legend_y_bottom, legend_x + legend_width, legend_y_top, 
+     col = NULL, border = "black")
+
+# Create custom legend labels
+tick_positions <- seq(legend_y_bottom, legend_y_top, length.out = 5)
+tick_labels <- c("0.0", "", "0.1", "", "0.3")  # Values from the reference image
+
+# Draw tick marks and labels
+segments(legend_x + legend_width, tick_positions, 
+         legend_x + legend_width + 0.01 * (usr[2] - usr[1]), tick_positions)
+text(legend_x + legend_width + 0.015 * (usr[2] - usr[1]), 
+     tick_positions, tick_labels, adj = 0, cex = 0.7)
+
+# Add legend title
+text(legend_x + legend_width/2, legend_y_top + 0.05 * (usr[4] - usr[3]), 
+     "KDE\n(log scale)", adj = c(0.5, 0), cex = 0.8)
+
+par(xpd = FALSE)  # Reset to not plot outside the plot region
+```
+
+
+
+```{r}
+# Next step is Buffer Analysis to extract  Exposure Zones
+# I am creating  multiple buffers around accident points (500m, 1km, 3km)
+buffer_500m <- st_buffer(ohio_accidents_sf, 500)
+buffer_1km <- st_buffer(ohio_accidents_sf, 1000)
+buffer_3km <- st_buffer(ohio_accidents_sf, 3000)
+
+# generating a map showing the different buffer zones 
+# Clear environment and reset plot parameters
+par(mfrow=c(1,1), mar=c(3,3,2,1))
+
+# Create buffers around the points - using sizes from your successful example
+buffer_500m <- st_buffer(ohio_accidents_sf, 5000)  # 10x larger for visibility
+buffer_100m <- st_buffer(ohio_accidents_sf, 2000)  # 20x larger for visibility
+
+# Transform to WGS84
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+buffer_500m_geo <- st_transform(buffer_500m, 4326)
+buffer_100m_geo <- st_transform(buffer_100m, 4326)
+
+# Set up the plotting area
+plot(st_geometry(ohio_boundary_geo),
+     col = "white", 
+     border = NA,
+     main = "Pipeline Accidents in Relation to Water Resources",
+     axes = FALSE)
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Plot the 500m buffer with light blue
+plot(st_geometry(buffer_500m_geo),
+     col = rgb(0.7, 0.9, 1, 0.2),  # Light blue with transparency
+     border = NA,
+     add = TRUE)
+
+# Plot the 100m buffer with darker blue
+plot(st_geometry(buffer_100m_geo),
+     col = rgb(0.1, 0.6, 1, 0.4),  # Darker blue with transparency
+     border = NA,
+     add = TRUE)
+
+# Add Ohio boundary to clip any overflow
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# Add subtitle
+mtext("100m and 500m buffers around accident locations (scaled for visibility)", 
+      side = 3, line = -0.3, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create legend with just the buffer zones
+legend("bottomright", 
+       legend = c("500m Buffer Zone", "100m Buffer Zone"),
+       fill = c(rgb(0.7, 0.9, 1, 0.2), rgb(0.1, 0.6, 1, 0.4)),
+       border = "black",
+       bty = "n",
+       cex = 0.8,
+       title = "Buffer Zones")
+
+
+# trying to count number of accidents near water resources individually
+num_near_waterbodies <- sum(rowSums(accidents_near_waterbodies) > 0)
+num_near_flowlines <- sum(rowSums(accidents_near_flowlines) > 0)
+
+# Then, for total near water, I am combining the logical matrices 
+# First, checking if they allhave same dimensions 
+if (identical(dim(accidents_near_waterbodies), dim(accidents_near_flowlines))) {
+  # then created a new logical matrix
+  near_any_water <- matrix(FALSE, nrow=nrow(accidents_near_waterbodies), 
+                          ncol=ncol(accidents_near_waterbodies))
+  
+  # and I set it as  TRUE if either original matrix has TRUE
+  for (i in 1:nrow(accidents_near_waterbodies)) {
+    for (j in 1:ncol(accidents_near_waterbodies)) {
+      near_any_water[i,j] <- accidents_near_waterbodies[i,j] | accidents_near_flowlines[i,j]
+    }
+  }
+  
+  total_near_water <- sum(rowSums(near_any_water) > 0)
+} else {
+  # I have put an backup approach if dimensions don't match in case to avoid mismatch
+  accidents_near_water_list <- lapply(1:nrow(ohio_accidents_sf), function(i) {
+    any(accidents_near_waterbodies[i,]) | any(accidents_near_flowlines[i,])
+  })
+  total_near_water <- sum(unlist(accidents_near_water_list))
+}
+
+# Producing  a summary table 
+water_summary <- data.frame(
+  Category = c("Near Waterbodies (lakes, ponds)", 
+               "Near Flowlines (rivers, streams)", 
+               "Near Any Water Feature",
+               "Total Accidents"),
+  Count = c(num_near_waterbodies, 
+            num_near_flowlines, 
+            total_near_water,
+            nrow(ohio_accidents_sf)),
+  Percentage = c(num_near_waterbodies/nrow(ohio_accidents_sf)*100,
+                num_near_flowlines/nrow(ohio_accidents_sf)*100,
+                total_near_water/nrow(ohio_accidents_sf)*100,
+                100)
+)
+
+print(water_summary)
+
+# I am setting to True if near waterbody accidents fall within the buffer 
+# Also repeated the same for flowline data as well 
+ohio_accidents_sf$near_waterbody <- rowSums(accidents_near_waterbodies) > 0
+ohio_accidents_sf$near_flowline <- rowSums(accidents_near_flowlines) > 0
+
+# Then I create a categorical water proximity to divide and aggregate accidents
+ohio_accidents_sf$water_proximity <- case_when(
+  ohio_accidents_sf$near_waterbody & ohio_accidents_sf$near_flowline ~ "Near Both",
+  ohio_accidents_sf$near_waterbody ~ "Near Waterbody Only",
+  ohio_accidents_sf$near_flowline ~ "Near Flowline Only",
+  TRUE ~ "Not Near Water"
+)
+
+# Then I am trying to clip the waterbodies to Ohio's extent
+nhd_waterbodies_ohio <- st_intersection(nhd_waterbodies_proj, ohio_boundary)
+nhd_flowline_ohio <- st_intersection(nhd_flowline_proj_clean, ohio_boundary)
+
+# Water Proximity Map
+# Transform water data to geographic CRS
+nhd_waterbodies_ohio_geo <- st_transform(nhd_waterbodies_ohio, 4326)
+nhd_flowline_ohio_geo <- st_transform(nhd_flowline_ohio, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents Near Water Resources in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Add water features
+plot(st_geometry(nhd_waterbodies_ohio_geo),
+     col = "lightblue",
+     border = NA,
+     add = TRUE)
+
+plot(st_geometry(nhd_flowline_ohio_geo),
+     col = "blue",
+     lwd = 0.6,
+     add = TRUE)
+
+# Add Ohio boundary 
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     add = TRUE)
+
+# Define colors for water proximity categories
+prox_colors <- c("Near Both" = "purple", 
+                 "Near Waterbody Only" = "darkblue",
+                 "Near Flowline Only" = "darkgreen",
+                 "Not Near Water" = "red")
+
+# Plot accident points colored by water proximity
+# We need to split by category and plot each separately
+for(cat in names(prox_colors)) {
+  cat_points <- ohio_accidents_geo[ohio_accidents_geo$water_proximity == cat, ]
+  if(nrow(cat_points) > 0) {
+    plot(st_geometry(cat_points),
+         col = prox_colors[cat],
+         pch = 16,
+         cex = 1,
+         add = TRUE)
+  }
+}
+
+# Add axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add legend for water proximity categories
+legend("bottomright", 
+       legend = names(prox_colors),
+       col = unname(prox_colors),
+       pch = 16,
+       pt.cex = 1,
+       bty = "n",
+       cex = 0.8,
+       title = "Water Proximity")
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Spatial Autocorrelation Analysis
+# First I create a grid for analysis
+ohio_grid <- st_make_grid(ohio_boundary, cellsize = 5000, square = TRUE) %>%
+  st_sf() %>%
+  mutate(grid_id = row_number())
+
+# then I count accidents in each grid cell
+grid_counts <- st_intersects(ohio_grid, ohio_accidents_sf)
+ohio_grid$accident_count <- lengths(grid_counts)
+
+# to create neighbors list using queen contiguity method
+grid_nb <- poly2nb(ohio_grid, queen = TRUE)
+grid_weights <- nb2listw(grid_nb, style = "W")
+
+# and I also calculate global Moran's I
+moran_i <- moran.test(ohio_grid$accident_count, grid_weights)
+print(moran_i)
+
+# Also Local Moran's I for cluster detection
+local_moran <- localmoran(ohio_grid$accident_count, grid_weights)
+ohio_grid$local_moran_i <- local_moran[, 1]
+ohio_grid$p_value <- local_moran[, 5]
+
+# here I am trying to identify significant clusters to check how similar each grid cell’s accident count is to its neighbors.
+ohio_grid$cluster_type <- case_when(
+  ohio_grid$local_moran_i > 0 & ohio_grid$accident_count > mean(ohio_grid$accident_count) & 
+    ohio_grid$p_value <= 0.05 ~ "High-High",
+  ohio_grid$local_moran_i > 0 & ohio_grid$accident_count < mean(ohio_grid$accident_count) & 
+    ohio_grid$p_value <= 0.05 ~ "Low-Low",
+  ohio_grid$local_moran_i < 0 & ohio_grid$accident_count > mean(ohio_grid$accident_count) & 
+    ohio_grid$p_value <= 0.05 ~ "High-Low",
+  ohio_grid$local_moran_i < 0 & ohio_grid$accident_count < mean(ohio_grid$accident_count) & 
+    ohio_grid$p_value <= 0.05 ~ "Low-High",
+  TRUE ~ "Not Significant"
+)
+
+# LISA cluster map
+ggplot() +
+  geom_sf(data = ohio_grid, aes(fill = cluster_type)) +
+  geom_sf(data = ohio_boundary, fill = NA, color = "black") +
+  scale_fill_manual(values = c("High-High" = "red", 
+                              "Low-Low" = "blue", 
+                              "High-Low" = "pink", 
+                              "Low-High" = "lightblue", 
+                              "Not Significant" = "white")) +
+  theme_minimal() +
+  labs(title = "Local Indicators of Spatial Association (LISA)",
+       subtitle = "Pipeline Accidents in Ohio",
+       fill = "Cluster Type")
+
+
+nlcd <- rast(nlcd_path)
+
+# Repojecting the NLCD to match prev. CRS
+nlcd_proj <- project(nlcd, "EPSG:26917")
+
+# NLCD Classes and descriptions
+nlcd_classes <- data.frame(
+  value = c(11, 12, 21, 22, 23, 24, 31, 41, 42, 43, 51, 52, 71, 72, 73, 74, 81, 82, 90, 95),
+  class = c("Open Water", "Perennial Ice/Snow", "Developed, Open Space", "Developed, Low Intensity", 
+           "Developed, Medium Intensity", "Developed, High Intensity", "Barren Land", 
+           "Deciduous Forest", "Evergreen Forest", "Mixed Forest", "Dwarf Scrub", "Shrub/Scrub", 
+           "Grassland/Herbaceous", "Sedge/Herbaceous", "Lichens", "Moss", 
+           "Pasture/Hay", "Cultivated Crops", "Woody Wetlands", "Emergent Herbaceous Wetlands")
+)
+
+# Here I am extracting land use values at different accident points
+# Convert accidents to terra vector for extraction
+# First, converting the accidents to a SpatVector for terra
+ohio_accidents_vect <- vect(ohio_accidents_sf)
+
+# Then I  am extracting the land use classes at accident locations
+accident_landuse <- terra::extract(nlcd_proj, ohio_accidents_vect)
+
+# Checking
+head(accident_landuse)
+
+# Then I am creating a frequency table from the Class column present in the data
+landuse_freq <- table(accident_landuse$Class)
+landuse_freq_df <- as.data.frame(landuse_freq)
+colnames(landuse_freq_df) <- c("Class", "Count")
+
+# Calculating percentages
+landuse_freq_df$Percentage <- landuse_freq_df$Count / sum(landuse_freq_df$Count) * 100
+
+# Setting up Order by count
+landuse_freq_df <- landuse_freq_df[order(-landuse_freq_df$Count),]
+
+# checking results
+print(landuse_freq_df)
+
+# Plot
+ggplot(landuse_freq_df, aes(x = reorder(Class, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Distribution of Pipeline Accidents by Land Use Type",
+       x = "Land Use Category",
+       y = "Number of Accidents")
+
+
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+
+str(pipeline)
+
+# Finding columns that has dates in them
+colnames(pipeline)
+print(head(pipeline[, grepl("Date|date|year|Year|TIME|Time", colnames(pipeline), ignore.case = TRUE)]))
+
+# If RPTID contains year information, we could try to extract it
+# Extracting dates data from RFID column
+if("RPTID" %in% colnames(pipeline)) {
+  head(pipeline$RPTID)
+  # Extracting year from RPTID column
+  if(all(nchar(as.character(pipeline$RPTID)) >= 8)) {
+    # Extracting first 4 characters as year
+    pipeline$extracted_year <- as.numeric(substr(as.character(pipeline$RPTID), 1, 4))
+    
+    # Double checking the year data
+    valid_years <- pipeline$extracted_year >= 1900 & pipeline$extracted_year <= 2023
+    print(paste("Potentially valid years from RPTID:", sum(valid_years, na.rm=TRUE)))
+    
+    if(sum(valid_years, na.rm=TRUE) > 0) {
+      # Here I only filter data of Ohio 
+      ohio_accidents$Year <- as.numeric(substr(as.character(ohio_accidents$RPTID), 1, 4))
+      ohio_accidents$Decade <- floor(ohio_accidents$Year/10) * 10
+      
+      # Then Conducting a  temporal analysis
+      annual_counts <- ohio_accidents %>%
+        group_by(Year) %>%
+        summarise(Accidents = n(), .groups = "drop")
+        
+      # Plot annual trends
+      print(ggplot(annual_counts, aes(x = Year, y = Accidents)) +
+        geom_line() +
+        geom_point() +
+        theme_minimal() +
+        labs(title = "Annual Pipeline Accidents in Ohio",
+             x = "Year",
+             y = "Number of Accidents"))
+             
+      # then also a Decadal trend
+      decade_counts <- ohio_accidents %>%
+        group_by(Decade) %>%
+        summarise(Accidents = n(), .groups = "drop")
+        
+      print(ggplot(decade_counts, aes(x = as.factor(Decade), y = Accidents)) +
+        geom_bar(stat = "identity", fill = "steelblue") +
+        theme_minimal() +
+        labs(title = "Pipeline Accidents in Ohio by Decade",
+             x = "Decade",
+             y = "Number of Accidents"))
+    }
+  }
+}
+```
+
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Next analysis is to Calculate directional distribution(Standard Deviational Ellipse)
+# First Calculate mean center 
+mean_center <- st_coordinates(st_centroid(st_union(ohio_accidents_sf)))
+
+# then I extract the coordinates of all accident points
+coords <- st_coordinates(ohio_accidents_sf)
+
+# and calculate distance of each point from mean center
+dists <- sqrt((coords[,1] - mean_center[1])^2 + (coords[,2] - mean_center[2])^2)
+std_dist <- sd(dists)
+
+# then I create a buffer like circle  with radius equal to standard distance
+std_circle <- st_buffer(st_point(mean_center), std_dist) %>% st_sfc(crs = 26917)
+
+# Then I calculate directional trend using covariance of coordinates
+cov_matrix <- cov(coords)
+eigen_result <- eigen(cov_matrix)
+eigen_vectors <- eigen_result$vectors
+eigen_values <- eigen_result$values
+
+
+angle <- atan2(eigen_vectors[2,1], eigen_vectors[1,1])
+
+# and I calculate major and minor axes
+major_axis <- sqrt(eigen_values[1]) * 2  
+minor_axis <- sqrt(eigen_values[2]) * 2  
+
+# Plot 
+# Transform data to geographic CRS (WGS84) for lat/long display
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+std_circle_geo <- st_transform(std_circle, 4326)
+
+# Transform mean center and calculate axes in geographic coordinates
+mean_center_geo <- st_coordinates(st_centroid(st_union(ohio_accidents_geo)))
+
+# Transform the axes calculations to geographic space
+# Get the original angle and distances
+coords_geo <- st_coordinates(ohio_accidents_geo)
+cov_matrix_geo <- cov(coords_geo)
+eigen_result_geo <- eigen(cov_matrix_geo)
+eigen_vectors_geo <- eigen_result_geo$vectors
+eigen_values_geo <- eigen_result_geo$values
+angle_geo <- atan2(eigen_vectors_geo[2,1], eigen_vectors_geo[1,1])
+
+# Calculate major and minor axes in geographic coordinates
+major_axis_geo <- sqrt(eigen_values_geo[1]) * 2
+minor_axis_geo <- sqrt(eigen_values_geo[2]) * 2
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Directional Distribution of Pipeline Accidents in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Plot the standard distance circle
+plot(st_geometry(std_circle_geo),
+     col = NA,
+     border = "blue",
+     lwd = 1,
+     add = TRUE)
+
+# Add the major axis arrow
+arrows(
+  mean_center_geo[1], mean_center_geo[2],
+  mean_center_geo[1] + cos(angle_geo) * major_axis_geo,
+  mean_center_geo[2] + sin(angle_geo) * major_axis_geo,
+  col = "darkblue", lwd = 2, length = 0.10
+)
+
+# Add the minor axis arrow
+arrows(
+  mean_center_geo[1], mean_center_geo[2],
+  mean_center_geo[1] + cos(angle_geo + pi/2) * minor_axis_geo,
+  mean_center_geo[2] + sin(angle_geo + pi/2) * minor_axis_geo,
+  col = "darkgreen", lwd = 2, length = 0.10
+)
+
+# Add Ohio boundary
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# Plot the accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "red",
+     pch = 16,
+     cex = 1.5,
+     add = TRUE)
+
+# Add subtitle
+mtext("Mean Center, Standard Distance, and Principal Axes",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add a custom legend
+legend("bottomright", 
+       legend = c("Accident Locations", "Standard Distance", "Major Axis", "Minor Axis"),
+       col = c("red", "blue", "darkblue", "darkgreen"),
+       pch = c(16, NA, NA, NA),
+       lty = c(NA, 1, 1, 1),
+       lwd = c(NA, 1, 2, 2),
+       pt.cex = 1.5,
+       bty = "n",
+       cex = 0.8,
+       title = "Map Elements")
+```
+
+
+```{r}
+# Then I Calculate all the key spatial pattern related statistics
+
+# 1. Temporal statistics
+if(exists("annual_counts")) {
+  # Overall temporal trends
+  temp_stats <- data.frame(
+    Statistic = c("Total Accidents", "Year Range", "Year with Most Accidents", 
+                 "Maximum Annual Accidents", "Average Annual Accidents", "Recent 5-year Average"),
+    Value = c(
+      nrow(ohio_accidents),
+      paste(min(annual_counts$Year), "to", max(annual_counts$Year)),
+      annual_counts$Year[which.max(annual_counts$Accidents)],
+      max(annual_counts$Accidents),
+      round(mean(annual_counts$Accidents), 2),
+      round(mean(tail(annual_counts$Accidents, 5)), 2)
+    )
+  )
+  print("Temporal Statistics:")
+  print(temp_stats)
+}
+
+# 2. Cluster statistics from Moran's I
+if(exists("moran_i")) {
+  cluster_stats <- data.frame(
+    Statistic = c("Moran's I Value", "Moran's I p-value", "Spatial Pattern"),
+    Value = c(
+      round(moran_i$estimate[1], 4),
+      format.pval(moran_i$p.value, digits = 4),
+      ifelse(moran_i$p.value < 0.05, 
+             ifelse(moran_i$estimate[1] > 0, "Significant Clustering", "Significant Dispersion"), 
+             "Random")
+    )
+  )
+  print("Clustering Statistics:")
+  print(cluster_stats)
+}
+
+# 3. Directional Distribution Statistics
+dir_stats <- data.frame(
+  Statistic = c("Mean Center X", "Mean Center Y", "Standard Distance", 
+               "Major Axis Length", "Minor Axis Length", "Ratio (Major/Minor)", 
+               "Orientation Angle (degrees)"),
+  Value = c(
+    round(mean_center[1], 2),
+    round(mean_center[2], 2),
+    round(std_dist, 2),
+    round(major_axis, 2),
+    round(minor_axis, 2),
+    round(major_axis/minor_axis, 2),
+    round(angle * 180/pi, 2)
+  )
+)
+print("Directional Distribution Statistics:")
+print(dir_stats)
+
+# 4. LISA Cluster statistics
+if(exists("ohio_grid") && "cluster_type" %in% names(ohio_grid)) {
+  # Count by cluster type
+  cluster_counts <- table(ohio_grid$cluster_type)
+  cluster_type_stats <- data.frame(
+    Cluster_Type = names(cluster_counts),
+    Count = as.numeric(cluster_counts),
+    Percentage = round(as.numeric(cluster_counts) / sum(cluster_counts) * 100, 2)
+  )
+  print("LISA Cluster Type Statistics:")
+  print(cluster_type_stats)
+  
+  # here I count number of accidents in each cluster type
+  accidents_in_clusters <- list()
+  for(cluster_type in unique(ohio_grid$cluster_type)) {
+    grid_cells <- ohio_grid[ohio_grid$cluster_type == cluster_type, ]
+    accidents_in_cells <- st_intersects(grid_cells, ohio_accidents_sf)
+    accidents_in_clusters[[cluster_type]] <- sum(lengths(accidents_in_cells))
+  }
+  accidents_by_cluster <- data.frame(
+    Cluster_Type = names(accidents_in_clusters),
+    Accident_Count = unlist(accidents_in_clusters),
+    Percentage = round(unlist(accidents_in_clusters) / nrow(ohio_accidents_sf) * 100, 2)
+  )
+  print("Accidents by Cluster Type:")
+  print(accidents_by_cluster)
+}
+
+# 5. then also bring in Land use statistics for accidents
+if(exists("landuse_freq_df")) {
+  print("Land Use Distribution of Accidents:")
+  print(landuse_freq_df)
+}
+
+# and I produce a comprehensive summary dataframe for the report
+segment2_summary <- data.frame(
+  Analysis_Component = c(
+    "Temporal Trend", 
+    "Spatial Clustering", 
+    "Directional Distribution", 
+    "Land Use Context"
+  ),
+  Key_Finding = c(
+    ifelse(exists("annual_counts"), 
+           paste0("Peak accident year: ", annual_counts$Year[which.max(annual_counts$Accidents)], 
+                 " with ", max(annual_counts$Accidents), " accidents"), 
+           "Temporal data not available"),
+    
+    ifelse(exists("moran_i"), 
+           paste0("Significant spatial clustering (Moran's I = ", round(moran_i$estimate[1], 3), 
+                 ", p < ", format.pval(moran_i$p.value, digits = 2), ")"), 
+           "Clustering data not available"),
+    
+    paste0("Accidents show a directional trend (", round(angle * 180/pi, 1), 
+          "° orientation) with elongation ratio of ", round(major_axis/minor_axis, 2)),
+    
+    ifelse(exists("landuse_freq_df"), 
+           paste0("Most accidents occur in ", landuse_freq_df$Class[1], 
+                 " (", round(landuse_freq_df$Percentage[1], 1), "%)"), 
+           "Land use data not available")
+  )
+)
+
+print("Segment 2 Summary for Report:")
+print(segment2_summary)
+```
+
+
+
+```{r}
+# Hotspot Detection using Kernel Density Estimation(KDE)
+
+# I am creating a point pattern object for KDE
+library(spatstat)
+ohio_win <- as.owin(st_geometry(ohio_boundary))
+ohio_pts <- st_coordinates(ohio_accidents_sf)
+ohio_ppp <- ppp(ohio_pts[,1], ohio_pts[,2], window = ohio_win)
+
+bw_cv <- bw.diggle(ohio_ppp)
+print(paste("Optimal bandwidth from cross-validation:", round(bw_cv, 2), "meters"))
+
+# I am implementing Silverman's rule of thumb incase computation is intense to avoid session crashout
+n <- npoints(ohio_ppp)
+sigma_x <- sd(ohio_pts[,1])
+sigma_y <- sd(ohio_pts[,2])
+sigma <- (sigma_x + sigma_y) / 2
+bw_silverman <- 0.9 * sigma * n^(-0.2)
+print(paste("Silverman's rule of thumb bandwidth:", round(bw_silverman, 2), "meters"))
+
+# Then i select a suitable bandwidth 
+bandwidth <- 10000  
+
+# and I compute the KDE
+ohio_density <- density.ppp(ohio_ppp, sigma = bandwidth)
+
+# then I convert KDE to a raster for easier analysis
+library(terra)
+density_rast <- rast(ohio_density)
+crs(density_rast) <- "EPSG:26917" 
+
+# and I calculate statistics for the density values
+density_values <- values(density_rast)
+density_stats <- data.frame(
+  Statistic = c("Minimum Density", "Maximum Density", "Mean Density", "Median Density"),
+  Value = c(min(density_values, na.rm = TRUE), 
+           max(density_values, na.rm = TRUE),
+           mean(density_values, na.rm = TRUE),
+           median(density_values, na.rm = TRUE))
+)
+print("Kernel Density Statistics:")
+print(density_stats)
+
+# here I identify hotspots using a threshold approach
+
+density_mean <- mean(density_values, na.rm = TRUE)
+density_sd <- sd(density_values, na.rm = TRUE)
+hotspot_threshold <- density_mean + 2 * density_sd
+
+# I am creating a hotspot mask
+hotspot_mask <- density_rast > hotspot_threshold
+names(hotspot_mask) <- "hotspot"
+
+# so I can calculate area of hotspots
+hotspot_cells <- sum(values(hotspot_mask), na.rm = TRUE)
+cell_area <- prod(res(hotspot_mask)) / 1000000  # cell area in sq km
+hotspot_area <- hotspot_cells * cell_area
+total_area <- ncell(hotspot_mask) * cell_area
+hotspot_percentage <- (hotspot_area / total_area) * 100
+
+# then I convert hotspot mask to vector for intersection with point data
+hotspot_polygons <- as.polygons(hotspot_mask, dissolve = TRUE)
+hotspot_sf <- st_as_sf(hotspot_polygons)
+
+# trying to count accidents in hotspots
+accidents_in_hotspots <- st_intersects(ohio_accidents_sf, hotspot_sf)
+num_in_hotspots <- sum(lengths(accidents_in_hotspots) > 0)
+pct_in_hotspots <- (num_in_hotspots / nrow(ohio_accidents_sf)) * 100
+
+# also I am calculating hotspot intensity accidents per sq km within hotspots
+hotspot_intensity <- num_in_hotspots / hotspot_area
+
+# Summarizing all the hotspot stats
+hotspot_stats <- data.frame(
+  Statistic = c(
+    "Hotspot Threshold Value", 
+    "Number of Hotspots", 
+    "Total Hotspot Area (sq km)", 
+    "Percentage of Ohio in Hotspots", 
+    "Number of Accidents in Hotspots", 
+    "Percentage of Accidents in Hotspots",
+    "Accident Density in Hotspots (per sq km)"
+  ),
+  Value = c(
+    round(hotspot_threshold, 8),
+    length(unique(st_cast(hotspot_sf, "POLYGON"))),
+    round(hotspot_area, 2),
+    round(hotspot_percentage, 2),
+    num_in_hotspots,
+    round(pct_in_hotspots, 2),
+    round(hotspot_intensity, 2)
+  )
+)
+print("Hotspot Analysis Statistics:")
+print(hotspot_stats)
+
+# here I am trying to analyze land use within hotspots
+if(exists("nlcd_proj")) {
+  # so I first extract land use values from hotspot areas
+  hotspot_landuse <- terra::extract(nlcd_proj, hotspot_polygons)
+  
+  # then I calculate land use frequencies
+  hotspot_landuse_freq <- table(hotspot_landuse$Class)
+  hotspot_landuse_freq_df <- as.data.frame(hotspot_landuse_freq)
+  names(hotspot_landuse_freq_df) <- c("Class", "Count")
+  hotspot_landuse_freq_df$Percentage <- hotspot_landuse_freq_df$Count / sum(hotspot_landuse_freq_df$Count) * 100
+  
+  # and I sort it order by count
+  hotspot_landuse_freq_df <- hotspot_landuse_freq_df[order(-hotspot_landuse_freq_df$Count),]
+  
+  print("Land Use Distribution within Hotspots:")
+  print(head(hotspot_landuse_freq_df, 10))
+}
+
+# Map
+ggplot() +
+  geom_stars(data = st_as_stars(density_rast)) +
+  scale_fill_viridis_c(name = "Density", option = "plasma") +
+  geom_sf(data = hotspot_sf, fill = NA, color = "red", size = 1) +
+  geom_sf(data = ohio_boundary, fill = NA, color = "black") +
+  geom_sf(data = ohio_accidents_sf, size = 1, color = "black") +
+  theme_minimal() +
+  labs(title = "Kernel Density Estimation and Hotspots of Pipeline Accidents in Ohio",
+       subtitle = paste0("Hotspots defined as areas with density > 2 standard deviations above mean\n",
+                        num_in_hotspots, " of ", nrow(ohio_accidents_sf), 
+                        " accidents (", round(pct_in_hotspots, 1), "%) occur in hotspots")) +
+  theme(legend.position = "right")
+
+
+# I also calculating the distance from accidents to the nearest hotspot centroid
+hotspot_centroids <- st_centroid(st_cast(hotspot_sf, "POLYGON"))
+distances_to_hotspots <- st_distance(ohio_accidents_sf, hotspot_centroids)
+min_distances <- apply(distances_to_hotspots, 1, min)
+
+# I create a dataframe for Distance related stats
+distance_stats <- data.frame(
+  Statistic = c("Minimum Distance to Hotspot", "Mean Distance to Hotspot", 
+               "Median Distance to Hotspot", "Maximum Distance to Hotspot"),
+  Value = c(min(min_distances), mean(min_distances), 
+           median(min_distances), max(min_distances))
+)
+distance_stats$Value <- round(as.numeric(distance_stats$Value))
+print("Distance to Hotspot Statistics (meters):")
+print(distance_stats)
+
+# printing summary
+hotspot_summary <- data.frame(
+  Analysis_Component = "Hotspot Detection (KDE)",
+  Key_Finding = paste0(
+    round(pct_in_hotspots, 1), "% of accidents occur in hotspots covering only ", 
+    round(hotspot_percentage, 1), "% of Ohio's area, with an accident density of ",
+    round(hotspot_intensity, 1), " accidents per sq km"
+  )
+)
+
+print("Hotspot Analysis Summary for Report:")
+print(hotspot_summary)
+```
+
+
+
+
+
+```{r}
+# trying to acquire county population of Ohio
+library(tidycensus)   # for get_acs()
+library(dplyr)        # for left_join()
+library(sf)
+
+ohio_counties <- get_acs(
+  geography = "county",
+  variables = "B01003_001", 
+  state = "OH",
+  year = 2019
+)
+
+
+str(ohio_counties)
+head(ohio_counties)
+
+ohio_counties_geom <- st_read("~/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp")
+
+# then I join ACS data to the local shapefile
+ohio_counties_sf <- left_join(ohio_counties_geom, ohio_counties, by = "GEOID") %>%
+  st_transform(26917)  # match your project CRS
+
+
+
+
+```
+
+
+```{r}
+
+ohio_counties <- get_acs(
+  geography = "county",
+  variables = "B01003_001", # total population
+  state = "OH",
+  year = 2019
+)
+
+
+ohio_counties_geom <- st_read("~/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp") %>%
+  
+  rename(GEOID_tract = GEOID) %>%
+  # Then, I create a new 5-digit county GEOID column by slicing the first 5 digits
+  mutate(GEOID = substr(GEOID_tract, 1, 5))  
+
+# Then I join the ACS data to these “county-coded” tracts
+ohio_counties_sf <- left_join(ohio_counties_geom, ohio_counties, by = "GEOID") %>%
+  st_transform(26917)  # whilst also matching the CRS
+
+
+
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+
+ohio_tracts_data <- get_acs(
+  geography = "tract",
+  variables = "B01003_001", 
+  state = "OH",
+  year = 2019
+  
+)
+
+
+ohio_tracts_geom <- st_read("~/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp")
+
+
+
+
+ohio_tracts_sf <- left_join(ohio_tracts_geom, ohio_tracts_data, by = "GEOID") %>%
+  st_transform(26917)  
+
+# here I calculate population density (people per square km)
+ohio_tracts_sf$area_sqkm <- st_area(ohio_tracts_sf) / 1e6  
+ohio_tracts_sf$pop_density <- as.numeric(ohio_tracts_sf$estimate / ohio_tracts_sf$area_sqkm)
+
+# Map
+# Transform the data to geographic CRS for display
+ohio_tracts_geo <- st_transform(ohio_tracts_sf, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 6))  # Extra space on the right for the legend
+
+# Define breaks and colors for population density (log scale)
+pop_breaks <- c(0, 10, 100, 1000, 10000, max(ohio_tracts_geo$pop_density, na.rm = TRUE))
+# Create a color palette matching viridis
+viridis_colors <- viridisLite::viridis(5)
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_tracts_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents and Population Density in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_tracts_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Plot the population density choropleth
+plot(st_geometry(ohio_tracts_geo),
+     col = viridis_colors[findInterval(ohio_tracts_geo$pop_density, pop_breaks)],
+     border = NA,
+     add = TRUE)
+
+# Add tract boundaries (very light)
+plot(st_geometry(ohio_tracts_geo),
+     col = NA,
+     border = "#FFFFFF20",  # Very light white with transparency
+     lwd = 0.1,
+     add = TRUE)
+
+# Plot the accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "red",
+     pch = 16,
+     cex = 0.8,
+     add = TRUE)
+
+# Add subtitle
+mtext("Population density (people per sq km) with accident locations",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create a custom legend for population density
+legend_title <- "Population\nDensity"
+legend_labels <- c("10", "100", "1,000", "10,000")
+legend("right", 
+       legend = legend_labels,
+       fill = viridis_colors,
+       border = "#FFFFFF20",
+       bty = "n",
+       cex = 0.8,
+       title = legend_title)
+
+```
+
+
+
+
+```{r}
+# I conduct a Buffer Analysis around accident points 
+# so I first create multiple buffers around accident points (500m, 1km, 3km)
+buffer_500m <- st_buffer(ohio_accidents_sf, 500)
+buffer_1km <- st_buffer(ohio_accidents_sf, 1000)
+buffer_3km <- st_buffer(ohio_accidents_sf, 3000)
+
+# then I dissolve buffers to avoid double-counting population
+buffer_500m_dissolved <- st_union(buffer_500m)
+buffer_1km_dissolved <- st_union(buffer_1km)
+buffer_3km_dissolved <- st_union(buffer_3km)
+
+# and I convert them all to sf objects
+buffer_500m_sf <- st_sf(geometry = buffer_500m_dissolved)
+buffer_1km_sf <- st_sf(geometry = buffer_1km_dissolved)
+buffer_3km_sf <- st_sf(geometry = buffer_3km_dissolved)
+
+# and I calculate area of each buffer zone
+buffer_500m_sf$area_sqkm <- as.numeric(st_area(buffer_500m_sf) / 1000000)
+buffer_1km_sf$area_sqkm <- as.numeric(st_area(buffer_1km_sf) / 1000000)
+buffer_3km_sf$area_sqkm <- as.numeric(st_area(buffer_3km_sf) / 1000000)
+
+# and then to calculate the population within each buffer zone
+# I use an area-weighted approach for tracts that are partially within buffers
+population_500m <- st_interpolate_aw(
+  ohio_tracts_sf["estimate"], 
+  buffer_500m_sf, 
+  extensive = TRUE
+)
+
+population_1km <- st_interpolate_aw(
+  ohio_tracts_sf["estimate"], 
+  buffer_1km_sf, 
+  extensive = TRUE
+)
+
+population_3km <- st_interpolate_aw(
+  ohio_tracts_sf["estimate"], 
+  buffer_3km_sf, 
+  extensive = TRUE
+)
+
+# so I extract the population values
+pop_500m <- sum(population_500m$estimate)
+pop_1km <- sum(population_1km$estimate)
+pop_3km <- sum(population_3km$estimate)
+
+# and get total Ohio population for comparison
+total_ohio_pop <- sum(ohio_tracts_sf$estimate)
+
+# and then I calculate population density in each buffer zone
+pop_density_500m <- pop_500m / buffer_500m_sf$area_sqkm
+pop_density_1km <- pop_1km / buffer_1km_sf$area_sqkm
+pop_density_3km <- pop_3km / buffer_3km_sf$area_sqkm
+
+# Summary table for report 
+population_exposure <- data.frame(
+  Buffer_Distance = c("500m", "1km", "3km", "All of Ohio"),
+  Area_SqKm = c(buffer_500m_sf$area_sqkm, buffer_1km_sf$area_sqkm, buffer_3km_sf$area_sqkm, sum(as.numeric(ohio_tracts_sf$area_sqkm))),
+  Population = c(pop_500m, pop_1km, pop_3km, total_ohio_pop),
+  Population_Density = c(pop_density_500m, pop_density_1km, pop_density_3km, total_ohio_pop / sum(as.numeric(ohio_tracts_sf$area_sqkm))),
+  Percentage_of_Ohio_Pop = c(pop_500m / total_ohio_pop * 100, pop_1km / total_ohio_pop * 100, pop_3km / total_ohio_pop * 100, 100)
+)
+
+# View results
+print(population_exposure)
+```
+
+
+
+
+
+
+
+```{r}
+
+# install if you haven’t already
+if (!requireNamespace("conflicted", quietly = TRUE)) {
+  install.packages("conflicted")
+}
+
+# load it *before* you call conflict_prefer()
+library(conflicted)
+library(tidycensus)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# now this will work
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+
+
+print(head(ohio_socioeconomic_pop))
+str(ohio_socioeconomic_pop)
+
+# loading the tract file
+geometry_path <- "~/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp"
+ohio_tracts_boundaries <- st_read(geometry_path)
+
+
+# checking the geometry 
+print(head(ohio_tracts_boundaries))
+str(ohio_tracts_boundaries)
+
+# Then I do the Join between the two 
+# because both datasets  share a common identifier ('GEOID')
+ohio_socioeconomic <- left_join(ohio_tracts_boundaries, ohio_socioeconomic_pop, by = "GEOID")
+
+
+ohio_socioeconomic <- left_join(ohio_tracts_boundaries, ohio_socioeconomic_pop, by = "GEOID")
+
+# then i convert it to a non-spatial dataframe for reshaping later
+ohio_geo <- ohio_socioeconomic %>%
+  dplyr::select(GEOID, geometry)
+
+ohio_socioeconomic_df <- ohio_socioeconomic %>% 
+  sf::st_drop_geometry() %>%       # explicitly sf’s drop
+  dplyr::select(-moe)
+
+print(names(ohio_socioeconomic_df))
+
+
+
+if ("NAME.y" %in% names(ohio_socioeconomic_df)) {
+  ohio_socioeconomic_df <- ohio_socioeconomic_df %>% rename(NAME = NAME.y)
+} else if (!"NAME" %in% names(ohio_socioeconomic_df)) {
+  
+  ohio_socioconomic_df <- ohio_socioeconomic_df %>%
+    mutate(NAME = ifelse(!is.na(NAME.x) & NAME.x != "", NAME.x, GEOID))
+}
+
+
+ohio_socioeconomic_df <- ohio_socioeconomic_df %>% select(-NAME.x)
+
+# here I reshape the the dataset
+ohio_socioeconomic_wide <- ohio_socioeconomic_df %>%
+  pivot_wider(
+    id_cols = c(GEOID, NAME),  # now 'NAME' holds the descriptive information
+    names_from = variable,
+    values_from = estimate
+  )
+
+# then I do the join with geometry and convert it into an sf Object
+ohio_socioeconomic_wide <- ohio_socioeconomic_wide %>%
+  left_join(ohio_geo, by = "GEOID") %>%
+  st_sf()
+
+# Checking if join has been successful or not
+print(names(ohio_socioeconomic_wide))
+
+# i am checking if there any NA values in socioeconmic variables
+na_count <- colSums(is.na(st_drop_geometry(ohio_socioeconomic_wide)))
+print("NA counts in socioeconomic variables:")
+print(na_count)
+
+# then I calculate the vulnerability metrics
+ohio_socioeconomic_wide <- ohio_socioeconomic_wide %>%
+  mutate(
+    # I calculate poverty rate (%)
+    poverty_rate = ifelse(population > 0, poverty / population * 100, NA),
+    # then also calculate low education rate (%), using edu_total as denominator
+    low_edu_rate = ifelse(edu_total > 0, no_hs / edu_total * 100, NA)
+  )
+
+# Summarize the calculated rates for checking
+rate_summary <- ohio_socioeconomic_wide %>% st_drop_geometry() %>% summarise(
+  poverty_rate_min = min(poverty_rate, na.rm = TRUE),
+  poverty_rate_max = max(poverty_rate, na.rm = TRUE),
+  poverty_rate_mean = mean(poverty_rate, na.rm = TRUE),
+  low_edu_rate_min = min(low_edu_rate, na.rm = TRUE),
+  low_edu_rate_max = max(low_edu_rate, na.rm = TRUE),
+  low_edu_rate_mean = mean(low_edu_rate, na.rm = TRUE)
+)
+print("Summary of calculated rates:")
+print(rate_summary)
+
+# I have decided to Normalize Socioeconomic Metrics 
+ohio_socioeconomic_wide <- ohio_socioeconomic_wide %>%
+  mutate(
+    # because For income, higher values are less vulnerable, so I am inverting the normalization
+    income_range = max(income, na.rm = TRUE) - min(income, na.rm = TRUE),
+    income_norm = ifelse(income_range > 0, (max(income, na.rm = TRUE) - income) / income_range, 0),
+    
+    # and For poverty, higher rates mean more vulnerability
+    poverty_range = max(poverty_rate, na.rm = TRUE) - min(poverty_rate, na.rm = TRUE),
+    poverty_norm = ifelse(poverty_range > 0, (poverty_rate - min(poverty_rate, na.rm = TRUE)) / poverty_range, 0),
+    
+    # likewise for low education, higher rates mean more vulnerability
+    edu_range = max(low_edu_rate, na.rm = TRUE) - min(low_edu_rate, na.rm = TRUE),
+    edu_norm = ifelse(edu_range > 0, (low_edu_rate - min(low_edu_rate, na.rm = TRUE)) / edu_range, 0)
+  )
+
+# Computing a vulnerability index with a NA handling capacity 
+ohio_socioeconomic_wide <- ohio_socioeconomic_wide %>%
+  rowwise() %>%
+  mutate(
+    valid_indicators = sum(!is.na(c(income_norm, poverty_norm, edu_norm))),
+    vulnerability_index = ifelse(valid_indicators > 0,
+                                 sum(c(income_norm, poverty_norm, edu_norm), na.rm = TRUE) / valid_indicators,
+                                 NA)
+  ) %>%
+  ungroup()
+
+vuln_summary <- summary(ohio_socioeconomic_wide$vulnerability_index)
+print("Vulnerability index summary:")
+print(vuln_summary)
+
+# ensuring consistent CRS across the sf buffer
+buffer_3km_sf <- st_transform(buffer_3km_sf, st_crs(ohio_socioeconomic_wide))
+
+
+
+# Here I am trying to analyse the vulnerability within the buffer zones 
+tracts_in_buffer <- st_intersects(ohio_socioeconomic_wide, buffer_3km_sf)
+ohio_socioeconomic_wide$in_buffer <- lengths(tracts_in_buffer) > 0
+
+
+vuln_in_buffer <- mean(ohio_socioeconomic_wide$vulnerability_index[ohio_socioeconomic_wide$in_buffer], na.rm = TRUE)
+vuln_all_ohio <- mean(ohio_socioeconomic_wide$vulnerability_index, na.rm = TRUE)
+
+vulnerability_comparison <- data.frame(
+  Region = c("3km Buffer Zone Around Accidents", "Ohio Overall"),
+  Average_Vulnerability_Index = c(vuln_in_buffer, vuln_all_ohio),
+  Relative_Vulnerability = c(vuln_in_buffer / vuln_all_ohio * 100, 100)
+)
+print("Vulnerability comparison:")
+print(vulnerability_comparison)
+
+# I am calculating Population in Vulnerable Areas
+
+quantile_75 <- quantile(ohio_socioeconomic_wide$vulnerability_index, 0.75, na.rm = TRUE)
+ohio_socioeconomic_wide$high_vulnerability <- ohio_socioeconomic_wide$vulnerability_index >= quantile_75
+
+# Trying to obtain Population in high-vulnerability tracts within the 3km buffer
+high_vuln_pop_in_buffer <- sum(ohio_socioeconomic_wide$population[ohio_socioeconomic_wide$in_buffer & ohio_socioeconomic_wide$high_vulnerability], na.rm = TRUE)
+total_pop_in_buffer <- sum(ohio_socioeconomic_wide$population[ohio_socioeconomic_wide$in_buffer], na.rm = TRUE)
+high_vuln_pct_in_buffer <- high_vuln_pop_in_buffer / total_pop_in_buffer * 100
+
+# and then getting the overall high vulnerability population percentage
+high_vuln_pop_overall <- sum(ohio_socioeconomic_wide$population[ohio_socioeconomic_wide$high_vulnerability], na.rm = TRUE)
+total_pop_overall <- sum(ohio_socioeconomic_wide$population, na.rm = TRUE)
+high_vuln_pct_overall <- high_vuln_pop_overall / total_pop_overall * 100
+
+vulnerable_pop_stats <- data.frame(
+  Region = c("3km Buffer Zone", "Ohio Overall"),
+  Total_Population = c(total_pop_in_buffer, total_pop_overall),
+  High_Vulnerability_Population = c(high_vuln_pop_in_buffer, high_vuln_pop_overall),
+  Percentage_High_Vulnerability = c(high_vuln_pct_in_buffer, high_vuln_pct_overall)
+)
+print("Vulnerable population statistics:")
+print(vulnerable_pop_stats)
+```
+
+
+
+
+
+```{r}
+# here I checking the classes available in the NLCD data
+nlcd_class_values <- unique(values(nlcd_proj))
+print("Unique NLCD class values:")
+print(nlcd_class_values)
+
+# getting the factor if class has levels
+if(is.factor(values(nlcd_proj)[,1])) {
+  nlcd_class_levels <- levels(values(nlcd_proj)[,1])
+  print("NLCD class levels:")
+  print(nlcd_class_levels)
+}
+
+
+```
+
+
+
+```{r}
+
+nlcd_proj <- project(nlcd, "EPSG:26917")
+
+# Then I extract NLCD classes at accident locations
+ohio_accidents_vect <- vect(ohio_accidents_sf)
+accident_nlcd <- terra::extract(nlcd_proj, ohio_accidents_vect)
+
+# and I check what we have from extraction
+head(accident_nlcd)
+
+# and I get frequency table of land use at accident locations
+accident_landuse_freq <- table(accident_nlcd$Class)
+print("NLCD class distribution at accident locations:")
+print(accident_landuse_freq)
+
+developed_mask <- ifel(nlcd_proj %in% c("Developed, Open Space", 
+                                        "Developed, Low Intensity", 
+                                        "Developed, Medium Intensity", 
+                                        "Developed High Intensity"), 1, NA)
+
+# here I convert the developed mask to polygons
+developed_areas <- as.polygons(developed_mask, dissolve=TRUE)
+developed_areas_sf <- st_as_sf(developed_areas)
+
+# then I calculate distance from each accident to the nearest developed area
+if(nrow(developed_areas_sf) > 0) {
+  # and I transform it to right CRS
+  developed_areas_sf <- st_transform(developed_areas_sf, st_crs(ohio_accidents_sf))
+  
+  # then I calculate distances
+  distances_to_urban <- st_distance(ohio_accidents_sf, developed_areas_sf)
+  
+  # and I get minimum distance for each accident
+  min_dist_to_urban <- apply(distances_to_urban, 1, min)
+  
+  # I push all the accidents data to dataframe
+  ohio_accidents_sf$dist_to_urban <- min_dist_to_urban
+  
+  # and I classify accidents by proximity to urban areas
+  ohio_accidents_sf$urban_proximity <- cut(
+    as.numeric(ohio_accidents_sf$dist_to_urban),
+    breaks = c(0, 100, 1000, 5000, Inf),
+    labels = c("In Urban", "Adjacent to Urban (<100m)", "Near Urban (100m-1km)", "Rural (>1km)"),
+    include.lowest = TRUE
+  )
+  
+  # and I calculate summary stats
+  urban_proximity_stats <- table(ohio_accidents_sf$urban_proximity)
+  urban_proximity_pct <- prop.table(urban_proximity_stats) * 100
+  
+  # and I create a summary dataframe
+  urban_proximity_summary <- data.frame(
+    Proximity_Category = names(urban_proximity_stats),
+    Accident_Count = as.numeric(urban_proximity_stats),
+    Percentage = as.numeric(urban_proximity_pct)
+  )
+  
+  # Print urban proximity stats
+  print("Pipeline Accidents by Proximity to Urban Areas (NLCD-based):")
+  print(urban_proximity_summary)
+}
+```
+
+
+
+
+
+
+
+
+```{r}
+# Environmental Exposure Analysis
+
+# I am going to conduct a Buffer analysis around water resources
+# so I first start with creating buffers around water features
+waterbody_buffer_100m <- st_buffer(nhd_waterbodies_proj, 100)
+waterbody_buffer_500m <- st_buffer(nhd_waterbodies_proj, 500)
+flowline_buffer_100m <- st_buffer(nhd_flowline_proj_clean, 100)
+flowline_buffer_500m <- st_buffer(nhd_flowline_proj_clean, 500)
+
+# and then I find accidents near water resources
+accidents_near_waterbody_100m <- st_intersects(ohio_accidents_sf, waterbody_buffer_100m, sparse = FALSE)
+accidents_near_waterbody_500m <- st_intersects(ohio_accidents_sf, waterbody_buffer_500m, sparse = FALSE)
+accidents_near_flowline_100m <- st_intersects(ohio_accidents_sf, flowline_buffer_100m, sparse = FALSE)
+accidents_near_flowline_500m <- st_intersects(ohio_accidents_sf, flowline_buffer_500m, sparse = FALSE)
+
+# and I simply count number of accidents near water resources
+num_near_waterbody_100m <- sum(apply(accidents_near_waterbody_100m, 1, any))
+num_near_waterbody_500m <- sum(apply(accidents_near_waterbody_500m, 1, any))
+num_near_flowline_100m <- sum(apply(accidents_near_flowline_100m, 1, any))
+num_near_flowline_500m <- sum(apply(accidents_near_flowline_500m, 1, any))
+
+# and then I create a summary table for water proximity
+water_proximity_summary <- data.frame(
+  Water_Feature = c("Lakes/Ponds", "Lakes/Ponds", "Rivers/Streams", "Rivers/Streams"),
+  Buffer_Distance = c("100m", "500m", "100m", "500m"),
+  Accidents = c(num_near_waterbody_100m, num_near_waterbody_500m, 
+               num_near_flowline_100m, num_near_flowline_500m),
+  Percentage = c(num_near_waterbody_100m/nrow(ohio_accidents_sf)*100,
+                num_near_waterbody_500m/nrow(ohio_accidents_sf)*100,
+                num_near_flowline_100m/nrow(ohio_accidents_sf)*100,
+                num_near_flowline_500m/nrow(ohio_accidents_sf)*100)
+)
+
+# then I print water proximity summary
+print("Pipeline Accidents Proximity to Water Resources:")
+print(water_proximity_summary)
+
+# I also calculate accidents near any water feature (100m)
+accidents_near_any_water_100m <- rowSums(cbind(
+  accidents_near_waterbody_100m, 
+  accidents_near_flowline_100m)) > 0
+
+# likewise also calculate accidents near any water feature (500m)
+accidents_near_any_water_500m <- rowSums(cbind(
+  accidents_near_waterbody_500m, 
+  accidents_near_flowline_500m)) > 0
+
+# Summary
+water_summary_combined <- data.frame(
+  Buffer_Distance = c("100m", "500m"),
+  Accidents_Near_Any_Water = c(sum(accidents_near_any_water_100m),
+                              sum(accidents_near_any_water_500m)),
+  Percentage_Near_Any_Water = c(sum(accidents_near_any_water_100m)/nrow(ohio_accidents_sf)*100,
+                               sum(accidents_near_any_water_500m)/nrow(ohio_accidents_sf)*100)
+)
+
+print("Pipeline Accidents Near Any Water Feature:")
+print(water_summary_combined)
+
+# I am going to conduct an Intersection analysis with NLCD land use types
+# and then extract NLCD class at each accident location
+accident_landuse <- data.frame(
+  ID = 1:nrow(ohio_accidents_sf),
+  Class = accident_nlcd$Class
+)
+
+# then I count accidents by land use type
+landuse_counts <- table(accident_landuse$Class)
+landuse_summary <- data.frame(
+  Land_Use = names(landuse_counts),
+  Accident_Count = as.numeric(landuse_counts),
+  Percentage = as.numeric(landuse_counts)/nrow(accident_landuse)*100
+)
+
+# and sort the Order by accident count
+landuse_summary <- landuse_summary[order(-landuse_summary$Accident_Count),]
+
+print("Pipeline Accidents by Land Use Type:")
+print(landuse_summary)
+
+
+landuse_sensitivity <- data.frame(
+  Land_Use = c(
+    "Open Water", "Woody Wetlands", "Emergent Herbaceous Wetlands", 
+    "Deciduous Forest", "Evergreen Forest", "Mixed Forest",
+    "Barren Land (Rock/Sand/Clay)", "Grassland/Herbaceous", "Shrub/Scrub",
+    "Pasture/Hay", "Cultivated Crops",
+    "Developed, Open Space", "Developed, Low Intensity", 
+    "Developed, Medium Intensity", "Developed High Intensity"
+  ),
+  Sensitivity_Weight = c(
+    5, 5, 5,  
+    4, 4, 4,  
+    3, 3, 3,  
+    2, 2,     
+    1, 1, 1, 1  
+  )
+)
+
+# here I join sensitivity weights to the accident land use data
+accident_sensitivity <- merge(
+  accident_landuse, 
+  landuse_sensitivity, 
+  by.x = "Class", 
+  by.y = "Land_Use", 
+  all.x = TRUE
+)
+
+# likewise I calculate avg. environmental sensitivity of accident locations
+avg_sensitivity <- mean(accident_sensitivity$Sensitivity_Weight, na.rm = TRUE)
+print(paste("Average Environmental Sensitivity Index of Accident Locations:", round(avg_sensitivity, 2)))
+
+# so that I can group by sensitivity levels
+sensitivity_groups <- accident_sensitivity %>%
+  group_by(Sensitivity_Weight) %>%
+  summarize(
+    Accident_Count = n(),
+    Percentage = n() / nrow(accident_sensitivity) * 100
+  )
+
+print("Accidents by Environmental Sensitivity Level:")
+print(sensitivity_groups)
+
+library(sf)
+library(mapsf)
+library(viridisLite)
+library(dplyr)
+library(forcats)
+
+#— 1. Make sure your sf object has that sensitivity factor,
+#     and convert ANY remaining NAs into "Unknown":
+ohio_accidents_sf <- ohio_accidents_sf %>%
+  mutate(
+    sensitivity = fct_explicit_na(
+      sensitivity,
+      na_level = "Unknown"
+    )
+  )
+
+#— 2. Reproject everything to your chosen CRS
+ohio_boundary_geo   <- st_transform(ohio_boundary,       26917)
+nhd_waterbodies_geo <- st_transform(nhd_waterbodies_ohio,26917)
+nhd_flowline_geo    <- st_transform(nhd_flowline_ohio,   26917)
+ohio_accidents_geo  <- st_transform(ohio_accidents_sf,   26917)
+
+#— 3. Create a palette *including* "Unknown" at the end
+base_levels <- c("Very Low","Low","Medium","High","Very High")
+pal_vals <- viridis(5, option = "D", direction = -1)
+palette_vals <- c(setNames(pal_vals, base_levels),
+                  "Unknown" = "gray50")
+
+#— 4. Tight margins
+par(mar = c(3, 3, 2, 1))
+
+#— 5. Empty base map + title
+plot(
+  st_geometry(ohio_boundary_geo),
+  col      = NA,
+  border   = NA,
+  axes     = FALSE,
+  main     = paste0(
+               "Pipeline Accidents by Environmental Sensitivity in Ohio\n",
+               "Classification based on land use type sensitivity"
+             ),
+  cex.main = 0.8
+)
+
+#— 6. Gridlines & labels
+bbox       <- st_bbox(ohio_boundary_geo)
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_labels <- paste0(abs(round(lon_breaks,2)), "°", ifelse(lon_breaks<0,"W","E"))
+lat_labels <- paste0(abs(round(lat_breaks,2)), "°", ifelse(lat_breaks<0,"S","N"))
+for (x in lon_breaks) abline(v = x, col = "grey90", lty = 2)
+for (y in lat_breaks) abline(h = y, col = "grey90", lty = 2)
+
+#— 7. Draw water & flowlines
+mf_map(nhd_waterbodies_geo, type = "base", col = "lightblue", border = NA, add = TRUE)
+mf_map(nhd_flowline_geo,    type = "base", col = "blue",      lwd    = 1,  add = TRUE)
+
+#— 8. Plot accident points (typology), suppressing mf_map’s legend
+mf_map(
+  ohio_accidents_geo,
+  type    = "typo",
+  var     = "sensitivity",
+  pal     = palette_vals,
+  pch     = 19,
+  cex     = 0.9,
+  add     = TRUE,
+  leg_pos = NA
+)
+
+#— 9. Now draw a clean categorical legend with *exactly* your 6 levels
+mf_legend(
+  type  = "typo",
+  pos   = "right",
+  val   = names(palette_vals),
+  pal   = palette_vals,
+  title = "Environmental\nSensitivity"
+)
+
+#— 10. Overlay the state border
+mf_map(
+  ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 1,
+  add    = TRUE
+)
+
+#— 11. Axes, arrow, scale, box
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+
+```
+
+
+
+
+```{r}
+
+```
+
+
+
+```{r}
+
+```
+
+
+
+```{r}
+
+
+# Integrated Risk Assessment
+
+# I am gonna create a coarser grid for risk assessment (10km instead of 5km)
+risk_grid_simple <- st_make_grid(ohio_boundary, cellsize = 10000, square = TRUE) %>%
+  st_sf() %>%
+  st_intersection(ohio_boundary) %>%
+  mutate(grid_id = row_number())
+
+# I count accidents in each grid cell
+accident_counts <- st_intersects(risk_grid_simple, ohio_accidents_sf)
+risk_grid_simple$accident_count <- lengths(accident_counts)
+risk_grid_simple$area_sq_km <- as.numeric(st_area(risk_grid_simple) / 1000000)
+risk_grid_simple$accident_density <- risk_grid_simple$accident_count / risk_grid_simple$area_sq_km
+
+# I am printing summary of accident counts per grid cell to check 
+print(summary(risk_grid_simple$accident_count))
+
+# then I add population data to each grid cell
+# and I use simpler interpolation that won't cause dimension mismatches
+risk_grid_simple$population <- 0
+
+# here I directly calculate population in each grid cell using point-in-polygon operation
+# First I convert population data to points at centroids
+ohio_tracts_points <- st_centroid(ohio_tracts_sf)
+ohio_tracts_points$population <- ohio_tracts_sf$estimate
+
+# and I assign population to grid cells
+for(i in 1:nrow(risk_grid_simple)) {
+  # and I find tract centroids within this grid cell
+  tracts_in_cell <- st_intersects(risk_grid_simple[i,], ohio_tracts_points)
+  if(length(tracts_in_cell[[1]]) > 0) {
+    # and I sum population from all tract centroids in this cell
+    risk_grid_simple$population[i] <- sum(ohio_tracts_points$population[tracts_in_cell[[1]]])
+  }
+}
+
+# so I can obtain and calculate population density
+risk_grid_simple$pop_density <- risk_grid_simple$population / risk_grid_simple$area_sq_km
+print(summary(risk_grid_simple$population))
+
+water_cells <- st_intersects(risk_grid_simple, nhd_waterbodies_proj)
+flowline_cells <- st_intersects(risk_grid_simple, nhd_flowline_proj_clean)
+
+# then I mark cells that contain water features
+risk_grid_simple$has_waterbody <- lengths(water_cells) > 0
+risk_grid_simple$has_flowline <- lengths(flowline_cells) > 0
+risk_grid_simple$has_water <- risk_grid_simple$has_waterbody | risk_grid_simple$has_flowline
+risk_grid_simple$water_factor <- as.numeric(risk_grid_simple$has_water)
+
+# and I print water feature presence
+water_presence <- table(risk_grid_simple$has_water)
+print("Grid cells containing water features:")
+print(water_presence)
+
+
+# I do the normalizzation process for having risk factors ( from 0 to 1 scale )
+
+max_acc_density <- max(risk_grid_simple$accident_density, na.rm = TRUE)
+risk_grid_simple$accident_norm <- risk_grid_simple$accident_density / max_acc_density
+
+max_pop_density <- max(risk_grid_simple$pop_density, na.rm = TRUE)
+risk_grid_simple$pop_norm <- risk_grid_simple$pop_density / max_pop_density
+
+# Then I calculate integrated risk index
+risk_grid_simple$risk_index <- (0.5 * risk_grid_simple$accident_norm) + 
+                              (0.3 * risk_grid_simple$pop_norm) + 
+                              (0.2 * risk_grid_simple$water_factor)
+
+# Finally here I categorize risk levels
+risk_breaks <- quantile(risk_grid_simple$risk_index, 
+                       probs = c(0, 0.75, 0.9, 0.95, 0.975, 1), 
+                       na.rm = TRUE)
+risk_grid_simple$risk_category <- cut(risk_grid_simple$risk_index, 
+                                    breaks = risk_breaks,
+                                    labels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+                                    include.lowest = TRUE)
+
+# so I can generate risk stats
+risk_stats <- data.frame(
+  Risk_Category = levels(risk_grid_simple$risk_category),
+  Cell_Count = as.numeric(table(risk_grid_simple$risk_category)),
+  Area_Sq_Km = tapply(risk_grid_simple$area_sq_km, risk_grid_simple$risk_category, sum),
+  Area_Percent = tapply(risk_grid_simple$area_sq_km, risk_grid_simple$risk_category, sum) / 
+                sum(risk_grid_simple$area_sq_km) * 100,
+  Population = tapply(risk_grid_simple$population, risk_grid_simple$risk_category, sum),
+  Population_Percent = tapply(risk_grid_simple$population, risk_grid_simple$risk_category, sum) / 
+                      sum(risk_grid_simple$population) * 100,
+  Accident_Count = tapply(risk_grid_simple$accident_count, risk_grid_simple$risk_category, sum),
+  Accident_Percent = tapply(risk_grid_simple$accident_count, risk_grid_simple$risk_category, sum) / 
+                    sum(risk_grid_simple$accident_count) * 100
+)
+
+# and print risk stats
+print("Integrated Risk Assessment Statistics:")
+print(risk_stats)
+
+#— Load libraries
+library(sf)
+library(mapsf)
+library(viridisLite)
+
+#— 1. Reproject all layers to geographic CRS (WGS84) for neat axes
+risk_grid_geo      <- st_transform(risk_grid_simple, 4326)
+ohio_boundary_geo  <- st_transform(ohio_boundary,     4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+#— 2. Ensure risk_category is a factor with desired order
+risk_grid_geo$risk_category <- factor(
+  risk_grid_geo$risk_category,
+  levels = c("Very Low","Low","Moderate","High","Very High")
+)
+
+#— 3. Create a reversed Inferno palette matching the levels
+pal_vals <- viridisLite::inferno(length(levels(risk_grid_geo$risk_category)), direction = -1)
+names(pal_vals) <- levels(risk_grid_geo$risk_category)
+
+#— 4. Set tight margins (bottom, left, top, right)
+par(mar = c(3, 3, 2, 1))
+
+#— 5. Empty base plot with title + subtitle
+plot(
+  st_geometry(ohio_boundary_geo),
+  col      = NA,
+  border   = NA,
+  axes     = FALSE,
+  main     = paste0(
+               "Integrated Risk Assessment for Pipeline Accidents in Ohio\n",
+               "Combining accident density, population exposure, and environmental factors"
+             ),
+  cex.main = 0.7
+)
+
+#— 6. Gridlines & lat/long labels
+bbox       <- st_bbox(ohio_boundary_geo)
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_labels <- paste0(abs(round(lon_breaks, 2)), "°", ifelse(lon_breaks < 0, "W", "E"))
+lat_labels <- paste0(abs(round(lat_breaks, 2)), "°", ifelse(lat_breaks < 0, "S", "N"))
+
+for (x in lon_breaks) abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+for (y in lat_breaks) abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+
+#— 7. Choropleth of risk categories (no built-in legend)
+mf_map(
+  x        = risk_grid_geo,
+  type     = "typo",
+  var      = "risk_category",
+  pal      = pal_vals,
+  border   = NA,
+  add      = TRUE,
+  leg_pos  = NA    # suppress the default legend
+)
+
+#— 8. Custom legend showing only the five risk levels
+mf_legend(
+  type  = "typo",
+  pos   = "right",
+  val   = levels(risk_grid_geo$risk_category),
+  pal   = pal_vals,
+  title = "Risk Level"
+)
+
+#— 9. Overlay state boundary for crisp edge
+mf_map(
+  x      = ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 0.5,
+  add    = TRUE
+)
+
+#— 10. Accident points
+mf_map(
+  x      = ohio_accidents_geo,
+  type   = "base",
+  col    = "black",
+  pch    = 19,
+  cex    = 0.5,
+  add    = TRUE
+)
+
+#— 11. Axes, north arrow, scale bar, and frame box
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+
+```
+
+
+
+
+
+```{r}
+# I am trying to check the temporal distribution of accidents
+
+if("Year" %in% names(ohio_accidents_sf)) {
+  # then I trace the distribution of accidents by year
+  table(ohio_accidents_sf$Year)
+} else {
+  
+  names(ohio_accidents_sf)
+}
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Map
+ggplot() +
+  geom_sf(data = ohio_boundary, fill = "white") +
+  geom_sf(data = ohio_accidents_sf, aes(color = as.factor(Decade)), size = 1.5) +
+  scale_color_brewer(name = "Decade", palette = "Set1") +
+  theme_minimal() +
+  labs(title = "Pipeline Accidents in Ohio by Decade (1980-2019)")
+```
+
+```{r}
+# Checking the columns
+colnames(ohio_accidents_sf)
+
+if("Year" %in% colnames(ohio_accidents_sf)) {
+  # i am trying to check if they contain actual values or just NAs
+  print("First few Year values:")
+  print(head(ohio_accidents_sf$Year))
+  print("Year value counts:")
+  print(table(ohio_accidents_sf$Year, useNA = "ifany"))
+}
+
+if("Decade" %in% colnames(ohio_accidents_sf)) {
+  print("First few Decade values:")
+  print(head(ohio_accidents_sf$Decade))
+  print("Decade value counts:")
+  print(table(ohio_accidents_sf$Decade, useNA = "ifany"))
+}
+
+print("First few RPTID values:")
+print(head(ohio_accidents_sf$RPTID))
+```
+
+
+
+
+
+```{r}
+
+head(ohio_accidents_sf[, c("RPTID", "Year", "Decade")])
+
+# I am trying to count NA values
+sum(is.na(ohio_accidents_sf$Decade))
+sum(is.na(ohio_accidents_sf$Year))
+
+# I am attempting to recreate Year and Decade from RPTID
+# trying to print intermediate results to see if extraction works
+test_years <- substr(as.character(ohio_accidents_sf$RPTID), 1, 4)
+print(head(test_years))
+print(class(test_years))
+
+# then I Convert to numeric and recreate Decade
+test_years_num <- as.numeric(test_years)
+print(head(test_years_num))
+test_decades <- floor(test_years_num/10) * 10
+print(head(test_decades))
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# so here I extract year from RPTID
+ohio_accidents_sf$Year <- as.numeric(substr(as.character(ohio_accidents_sf$RPTID), 1, 4))
+
+# then I create decade column 
+ohio_accidents_sf$Decade <- floor(ohio_accidents_sf$Year/10) * 10
+
+# and I verify if the extraction worked
+head(ohio_accidents_sf[, c("RPTID", "Year", "Decade")])
+
+# doing the decade analysis again 
+accidents_1980s <- ohio_accidents_sf[ohio_accidents_sf$Decade == 1980,]
+accidents_1990s <- ohio_accidents_sf[ohio_accidents_sf$Decade == 1990,]
+accidents_2000s <- ohio_accidents_sf[ohio_accidents_sf$Decade == 2000,]
+accidents_2010s <- ohio_accidents_sf[ohio_accidents_sf$Decade == 2010,]
+
+# I am verifying if the subsetting worked or not
+print(paste("1980s accidents:", nrow(accidents_1980s)))
+print(paste("1990s accidents:", nrow(accidents_1990s)))
+print(paste("2000s accidents:", nrow(accidents_2000s)))
+print(paste("2010s accidents:", nrow(accidents_2010s)))
+
+# I calculate summary stats here
+decade_stats <- data.frame(
+  Decade = c("1980s", "1990s", "2000s", "2010s"),
+  Accident_Count = c(nrow(accidents_1980s), nrow(accidents_1990s), nrow(accidents_2000s), nrow(accidents_2010s)),
+  Percent_of_Total = c(nrow(accidents_1980s), nrow(accidents_1990s), nrow(accidents_2000s), nrow(accidents_2010s)) / nrow(ohio_accidents_sf) * 100
+)
+
+# and acquire decade statistics
+print(decade_stats)
+
+#— Load libraries
+library(sf)
+library(mapsf)
+library(RColorBrewer)
+
+#— 1. Reproject to WGS84 for neat axes
+ohio_boundary_geo   <- st_transform(ohio_boundary,      4326)
+ohio_accidents_geo  <- st_transform(ohio_accidents_sf,  4326)
+
+#— 2. Create a factor for Decade with readable labels
+ohio_accidents_geo$Decade_fac <- factor(
+  ohio_accidents_geo$Decade,
+  levels = c(1980, 1990, 2000, 2010),
+  labels = c("1980s", "1990s", "2000s", "2010s")
+)
+
+#— 3. Palette from ColorBrewer Set1
+pal_set1 <- brewer.pal(n = 4, name = "Set1")
+names(pal_set1) <- levels(ohio_accidents_geo$Decade_fac)
+
+#— 4. Tight margins
+par(mar = c(3, 3, 2, 1))
+
+#— 5. Empty base plot with title
+plot(
+  st_geometry(ohio_boundary_geo),
+  col      = NA,
+  border   = NA,
+  axes     = FALSE,
+  main     = "Pipeline Accidents in Ohio by Decade (1980–2019)",
+  cex.main = 1.2
+)
+
+#— 6. Gridlines & lat/long labels
+bbox       <- st_bbox(ohio_boundary_geo)
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_labels <- paste0(abs(round(lon_breaks,2)), "°", ifelse(lon_breaks<0,"W","E"))
+lat_labels <- paste0(abs(round(lat_breaks,2)), "°", ifelse(lat_breaks<0,"S","N"))
+
+for(x in lon_breaks) abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+for(y in lat_breaks) abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+
+#— 7. Plot accident points by decade (categorical), suppress built‑in legend
+mf_map(
+  x        = ohio_accidents_geo,
+  type     = "typo",
+  var      = "Decade_fac",
+  pal      = pal_set1,
+  pch      = 19,
+  cex      = 0.7,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+#— 8. Custom legend for decades
+mf_legend(
+  type  = "typo",
+  pos   = "right",
+  val   = names(pal_set1),
+  pal   = pal_set1,
+  title = "Decade"
+)
+
+#— 9. Overlay state boundary for crisp edge
+mf_map(
+  x      = ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 1,
+  add    = TRUE
+)
+
+#— 10. Axes, north arrow, scale bar, and frame
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+```
+
+
+
+```{r}
+# I am creating separate kernel density estimates for each decade
+library(spatstat)
+
+# so I start with creating a spatial window for point pattern analysis using Ohio boundary
+ohio_win <- as.owin(st_geometry(ohio_boundary))
+
+# and then I function to create KDE for a specific decade
+create_kde_for_decade <- function(decade_data, window, bandwidth = 15000) {
+  # then convert to spatstat ppp object
+  coords <- st_coordinates(decade_data)
+  if(nrow(coords) > 0) {
+    ppp_obj <- ppp(coords[,1], coords[,2], window = window)
+    # and then simply alculate density
+    density_obj <- density.ppp(ppp_obj, sigma = bandwidth)
+    return(density_obj)
+  } else {
+    return(NULL)
+  }
+}
+
+# this is where I create KDEs for each decade
+kde_1980s <- create_kde_for_decade(accidents_1980s, ohio_win)
+kde_1990s <- create_kde_for_decade(accidents_1990s, ohio_win)
+kde_2000s <- create_kde_for_decade(accidents_2000s, ohio_win)
+kde_2010s <- create_kde_for_decade(accidents_2010s, ohio_win)
+
+# and convert to rasters for visualization
+library(terra)
+rast_1980s <- rast(kde_1980s)
+rast_1990s <- rast(kde_1990s)
+rast_2000s <- rast(kde_2000s)
+rast_2010s <- rast(kde_2010s)
+
+# I am ensuring consistency in CRS
+crs(rast_1980s) <- "EPSG:26917"
+crs(rast_1990s) <- "EPSG:26917"
+crs(rast_2000s) <- "EPSG:26917"
+crs(rast_2010s) <- "EPSG:26917"
+
+# I am calculating the maximum density value across all decades for consistent scaling
+max_density <- max(
+  max(values(rast_1980s), na.rm = TRUE),
+  max(values(rast_1990s), na.rm = TRUE),
+  max(values(rast_2000s), na.rm = TRUE),
+  max(values(rast_2010s), na.rm = TRUE)
+)
+
+# so I can calculate centroids for each decade later
+centroid_1980s <- st_centroid(st_union(accidents_1980s))
+centroid_1990s <- st_centroid(st_union(accidents_1990s))
+centroid_2000s <- st_centroid(st_union(accidents_2000s))
+centroid_2010s <- st_centroid(st_union(accidents_2010s))
+
+# and calculate distance between centroids to see if hotspots have shifted over time
+centroid_shifts <- data.frame(
+  Decades = c("1980s to 1990s", "1990s to 2000s", "2000s to 2010s"),
+  Distance_km = c(
+    as.numeric(st_distance(centroid_1980s, centroid_1990s)) / 1000,
+    as.numeric(st_distance(centroid_1990s, centroid_2000s)) / 1000,
+    as.numeric(st_distance(centroid_2000s, centroid_2010s)) / 1000
+  )
+)
+
+print("Shift in accident hotspot centroids over time (km):")
+print(centroid_shifts)
+```
+
+
+
+```{r}
+# I am trying to check if I  have ohio_counties_sf loaded
+if(exists("ohio_counties_sf")) {
+  
+  nrow(ohio_counties_sf)
+  head(names(ohio_counties_sf))
+} else {
+  # Just checking whats spatial strucuture it has 
+  # checking what spatial objects it has within
+  ls()[sapply(ls(), function(x) {
+    obj <- get(x)
+    inherits(obj, "sf")
+  })]
+}
+```
+
+
+
+
+
+```{r}
+library(sf)
+
+# Loading the state shapefile
+state_sf <- st_read("~/Assignment/cb_2018_us_state_500k/cb_2018_us_state_500k.shp")
+
+# Simply printing the names of the columns
+print(names(state_sf))
+
+# and looking at the first few rows of data
+head(state_sf)
+
+```
+
+```{r}
+library(tigris)
+options(tigris_use_cache = TRUE)
+ohio_counties_sf <- counties(state = "OH", cb = TRUE) %>%
+  st_transform(26917)
+
+```
+
+
+```{r}
+# I am checking column names in the county shapefile
+colnames(ohio_counties_geom)
+```
+
+
+```{r}
+# I am checking column names after the join
+colnames(ohio_counties_sf)
+```
+
+
+
+
+```{r}
+print(nrow(ohio_accidents_sf))
+print(nrow(ohio_counties_sf))
+
+
+```
+
+```{r}
+ohio_counties_sf <- st_transform(ohio_counties_sf, 26917)
+ohio_accidents_sf <- st_transform(ohio_accidents_sf, 26917)
+
+```
+
+
+```{r}
+intersection_list <- st_intersects(ohio_counties_sf, ohio_accidents_sf)
+print(length(intersection_list))  # Should return 88, one element per county
+
+```
+
+```{r}
+intersection_list <- st_intersects(ohio_counties_sf, ohio_accidents_sf)
+print(str(intersection_list))
+
+
+```
+
+
+
+```{r}
+print(head(unclass(intersection_list)))
+
+```
+
+
+
+```{r}
+
+library(tidycensus)
+library(dplyr)
+
+#setting up my census api key to fetch the population data 
+census_api_key("57f33a585201123b4db3ef8434bc8310fd3df315", install = TRUE, overwrite = TRUE)
+
+
+# Getting Ohio county population data from ACS
+ohio_pop <- get_acs(geography = "county", 
+                    variables = "B01003_001",  # Total population
+                    state = "OH", 
+                    year = 2021, 
+                    geometry = FALSE)
+
+# so I preview the population data
+head(ohio_pop)
+ohio_counties_sf <- left_join(ohio_counties_sf, ohio_pop %>% select(GEOID, estimate), by = "GEOID")
+
+```
+
+```{r}
+library(tigris)
+library(sf)
+options(tigris_use_cache = TRUE)
+
+ohio_counties_sf <- counties(state = "OH", cb = TRUE) %>%
+  st_transform(26917)  
+
+```
+
+```{r}
+library(dplyr)
+
+pop_data <- data.frame(
+  GEOID = c("39001", "39003", "39005", "39007", "39009", "39011"),
+  NAME = c("Adams County, Ohio", "Allen County, Ohio", "Ashland County, Ohio", 
+           "Ashtabula County, Ohio", "Athens County, Ohio", "Auglaize County, Ohio"),
+  variable = rep("B01003_001", 6),
+  estimate = c(27564, 102462, 52658, 97869, 62933, 46282),
+  moe = c(NA, NA, NA, NA, NA, NA),
+  stringsAsFactors = FALSE
+)
+
+ohio_counties_sf <- left_join(ohio_counties_sf, ohio_pop %>% select(GEOID, estimate), by = "GEOID")
+
+```
+
+
+```{r}
+# I am checking if all the accidents layer are in the same CRS
+ohio_accidents_sf <- st_transform(ohio_accidents_sf, 26917)
+
+# so I calculate accident counts per county using intersection
+intersection_list <- st_intersects(ohio_counties_sf, ohio_accidents_sf)
+ohio_counties_sf$accident_count <- lengths(intersection_list)
+
+# then I calculate county area in sq km.
+ohio_counties_sf$area_sqkm <- as.numeric(st_area(ohio_counties_sf)) / 1e6
+
+# I try to compute the accident rate per 1000 square km.
+ohio_counties_sf$accident_rate <- ohio_counties_sf$accident_count / ohio_counties_sf$area_sqkm * 1000
+
+# also the Population-weighted risk (accidents per 100,000 people).
+ohio_counties_sf$pop_risk <- ohio_counties_sf$accident_count / ohio_counties_sf$estimate * 100000
+
+```
+
+
+
+```{r}
+library(ggplot2)
+library(viridis)
+
+# I create a summary table
+county_risk_summary <- ohio_counties_sf %>%
+  st_drop_geometry() %>%
+  select(NAME, accident_count, accident_rate, estimate, pop_risk) %>%
+  rename(
+    County = NAME,
+    Accidents = accident_count,
+    "Accidents per 1000 sq km" = accident_rate,
+    Population = estimate,
+    "Accidents per 100,000 people" = pop_risk
+  ) %>%
+  arrange(desc(Accidents))
+
+print(head(county_risk_summary, 10))
+
+
+library(sf)
+library(mapsf)
+library(viridisLite)
+
+# 1) Reproject everything to WGS84 so axes are in °N/°W
+ohio_counties_geo <- st_transform(ohio_counties_sf, 4326)
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+
+# 2) Compute your gridlines & labels once
+bbox    <- st_bbox(ohio_boundary_geo)
+lon_br  <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_br  <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_lb  <- paste0(abs(round(lon_br,2)), "°", ifelse(lon_br<0,"W","E"))
+lat_lb  <- paste0(abs(round(lat_br,2)), "°", ifelse(lat_br<0,"N","N"))
+
+# 3) Shared Plasma palette
+pal100 <- viridisLite::plasma(100, direction = -1)
+
+# 4) Helper to draw the blank base + grids + title
+draw_base <- function(title) {
+  par(mar = c(3,3,2,1))
+  plot(
+    st_geometry(ohio_boundary_geo),
+    col    = NA,
+    border = NA,
+    axes   = FALSE,
+    main   = title,
+    cex.main = 1.2
+  )
+  for(x in lon_br) abline(v = x, col = "grey90", lty = 2)
+  for(y in lat_br) abline(h = y, col = "grey90", lty = 2)
+}
+
+# 5) Helper to overlay boundary, axes, arrow, scale & box
+add_axes <- function() {
+  mf_map(
+    x      = ohio_boundary_geo,
+    type   = "base",
+    col    = NA,
+    border = "black",
+    add    = TRUE
+  )
+  axis(1, at = lon_br, labels = lon_lb, cex.axis = 0.7)
+  axis(2, at = lat_br, labels = lat_lb, cex.axis = 0.7)
+  mf_arrow(pos = "topleft")
+  mf_scale(pos = "bottomleft")
+  box()
+}
+
+#–– Map 1: Accident counts ––
+draw_base("Pipeline Accidents by County in Ohio")
+
+# Create quantile breaks for accident count - fixed approach
+count_values <- ohio_counties_geo$accident_count
+# For quantiles, we'll use the stats::quantile function
+count_breaks <- c(
+  0,  # start at 0
+  stats::quantile(
+    count_values[count_values > 0],  # skip zeros for better breaks
+    probs = seq(0.2, 0.8, by = 0.2)
+  ),
+  max(count_values)  # end at max value
+)
+
+# Create a custom color palette with 7 colors (for 6 intervals)
+count_pal <- pal100[seq(1, 100, length.out = length(count_breaks) - 1)]
+
+mf_map(
+  x        = ohio_counties_geo,
+  type     = "choro",
+  var      = "accident_count",
+  breaks   = count_breaks,
+  pal      = count_pal,
+  border   = "grey70",
+  lwd      = 0.4,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+# Custom legend
+mf_legend(
+  type   = "choro",
+  pos    = "right",
+  title  = "Number of\nAccidents",
+  val    = count_breaks,
+  pal    = count_pal,
+  frame  = TRUE
+)
+add_axes()
+
+#–– Map 2: Accident rate per 1000 km² ––
+draw_base("Pipeline Accident Rate by County in Ohio")
+
+# Create quantile breaks for accident rate
+rate_values <- ohio_counties_geo$accident_rate
+rate_breaks <- c(
+  0,  # start at 0
+  stats::quantile(
+    rate_values[rate_values > 0],  # skip zeros for better breaks
+    probs = seq(0.2, 0.8, by = 0.2)
+  ),
+  max(rate_values)  # end at max value
+)
+
+# Create a custom color palette
+rate_pal <- pal100[seq(1, 100, length.out = length(rate_breaks) - 1)]
+
+mf_map(
+  x        = ohio_counties_geo,
+  type     = "choro",
+  var      = "accident_rate",
+  breaks   = rate_breaks,
+  pal      = rate_pal,
+  border   = "grey70",
+  lwd      = 0.4,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+mf_legend(
+  type   = "choro",
+  pos    = "right",
+  title  = "Accidents per\n1000 sq km",
+  val    = rate_breaks,
+  pal    = rate_pal,
+  frame  = TRUE
+)
+add_axes()
+
+#–– Map 3: Population-weighted risk per 100,000 people ––
+draw_base("Population-Weighted Pipeline Accident Risk by County")
+
+# Create quantile breaks for population risk
+risk_values <- ohio_counties_geo$pop_risk
+risk_breaks <- c(
+  0,  # start at 0
+  stats::quantile(
+    risk_values[risk_values > 0],  # skip zeros for better breaks
+    probs = seq(0.2, 0.8, by = 0.2)
+  ),
+  max(risk_values)  # end at max value
+)
+
+# Create a custom color palette
+risk_pal <- pal100[seq(1, 100, length.out = length(risk_breaks) - 1)]
+
+mf_map(
+  x        = ohio_counties_geo,
+  type     = "choro",
+  var      = "pop_risk",
+  breaks   = risk_breaks,
+  pal      = risk_pal,
+  border   = "grey70",
+  lwd      = 0.4,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+mf_legend(
+  type   = "choro",
+  pos    = "right",
+  title  = "Accidents per\n100,000 people",
+  val    = risk_breaks,
+  pal    = risk_pal,
+  frame  = TRUE
+)
+add_axes()
+
+```
+
+
+```{r}
+# I am checking if the column names and structure in the ohio_counties_sf
+print(names(ohio_counties_sf))
+str(ohio_counties_sf)
+
+```
+
+
+
+```{r}
+
+
+```
+
+```{r}
+names(ohio_counties_sf)
+head(ohio_counties_sf, 5)
+
+```
+
+
+
+```{r}
+
+
+# Then I transform this  to match the tract shapefile that I have downloaded manually
+ohio_accidents_sf <- st_transform(ohio_accidents_sf, st_crs(ohio_tracts_sf))
+
+
+# I am doing the intersection process
+ohio_tracts_sf$accident_count <- lengths(st_intersects(ohio_tracts_sf, ohio_accidents_sf))
+
+```
+
+
+```{r}
+nrow(ohio_accidents_sf)
+sum(st_is_empty(ohio_accidents_sf))
+st_bbox(ohio_tracts_sf)
+st_bbox(ohio_accidents_sf)
+st_crs(ohio_tracts_sf)
+st_crs(ohio_accidents_sf)
+
+```
+
+```{r}
+
+ohio_accidents_sf <- st_transform(ohio_accidents_sf, st_crs(ohio_tracts_sf))
+ohio_tracts_sf$accident_count <- lengths(st_intersects(ohio_tracts_sf, ohio_accidents_sf))
+
+```
+
+
+
+```{r}
+ohio_tracts_geom <- st_read("/s_home/ss1288/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp")
+
+names(ohio_tracts_geom)
+
+str(ohio_tracts_geom)
+
+head(ohio_tracts_geom, 5)
+
+```
+
+
+
+
+
+```{r}
+# I am trying to check structure of ohio_accidents_sf
+class(ohio_accidents_sf)
+nrow(ohio_accidents_sf)
+st_crs(ohio_accidents_sf)
+
+# and then I check ohio_boundary to make sure it matches
+class(ohio_boundary)
+st_crs(ohio_boundary)
+```
+
+
+
+```{r}
+# I am trying to generate Thiessen/Voronoi polygons for pipeline accident service areas
+
+# First I create the Voronoi polygons
+thiessen_polygons <- ohio_accidents_sf %>%
+  st_union() %>%                          
+  st_voronoi() %>%                        
+  st_collection_extract() %>%             
+  st_intersection(ohio_boundary)     
+
+# so I assign accident attributes to each polygon using nearest accident
+# Instead of directly using st_intersects (which assumed a 1:1 match), I am using st_nearest_feature.
+nearest_idx <- st_nearest_feature(thiessen_polygons, ohio_accidents_sf)
+# 'nearest_idx' now gives, for each polygon, the index of the nearest accident point.
+
+# and then I retrieve accident attribute data using these indices
+accident_attributes <- ohio_accidents_sf[nearest_idx, ]
+
+# After this I combine the accident attributes with the corresponding Voronoi polygon geometry.
+# this will create my final polygon geometry service areas
+thiessen_service_areas <- st_sf(accident_attributes, geometry = st_geometry(thiessen_polygons))
+
+#  I then calculate the area of each service area in sq. km.
+thiessen_service_areas$area_sq_km <- as.numeric(st_area(thiessen_service_areas)) / 1e6
+
+# so I calculate basic stats for the service areas.
+service_area_stats <- data.frame(
+  Statistic = c("Minimum Area", "Maximum Area", "Mean Area", "Median Area", "Total Area"),
+  Value_sq_km = c(
+    min(thiessen_service_areas$area_sq_km),
+    max(thiessen_service_areas$area_sq_km),
+    mean(thiessen_service_areas$area_sq_km),
+    median(thiessen_service_areas$area_sq_km),
+    sum(thiessen_service_areas$area_sq_km)
+  )
+)
+
+#— Load libraries
+library(sf)
+library(mapsf)
+library(terra)
+library(viridisLite)
+
+#— 1. Reproject to geographic CRS (WGS84) for axes
+thiessen_geo       <- st_transform(thiessen_service_areas, 4326)
+ohio_boundary_geo  <- st_transform(ohio_boundary,          4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf,      4326)
+
+#— 2. Build a template raster over Ohio at higher resolution (0.01°) for better quality
+bbox     <- st_bbox(ohio_boundary_geo)  # Use Ohio boundary for complete coverage
+template <- rast(
+  xmin       = bbox["xmin"], xmax = bbox["xmax"],
+  ymin       = bbox["ymin"], ymax = bbox["ymax"],
+  resolution = 0.01,  # Higher resolution than before
+  crs        = "EPSG:4326"
+)
+
+#— 3. Rasterize the Thiessen polygon areas
+area_rast <- rasterize(
+  vect(thiessen_geo),
+  template,
+  field = "area_sq_km"
+)
+
+#— 4. Plot setup: no margins around
+par(mar = c(3,3,2,1))
+plot(
+  st_geometry(ohio_boundary_geo),
+  col    = NA,
+  border = NA,
+  axes   = FALSE,
+  main   = paste0(
+    "Pipeline Accident Service Areas in Ohio\n",
+    "Thiessen Polygons by Size"
+  ),
+  cex.main = 1.2
+)
+
+#— 5. Add gridlines & lat/long labels
+lon_br <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_br <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_lb <- paste0(abs(round(lon_br,2)), "°", ifelse(lon_br<0,"W","E"))
+lat_lb <- paste0(abs(round(lat_br,2)), "°", ifelse(lat_br<0,"S","N"))
+for (x in lon_br) abline(v = x, col = "grey90", lty = 2)
+for (y in lat_br) abline(h = y, col = "grey90", lty = 2)
+
+#— 6. Continuous raster layer with reversed plasma palette
+mf_raster(
+  x       = area_rast,
+  pal     = viridisLite::plasma(100, direction = -1),
+  nbreaks = 100,
+  add     = TRUE,
+  leg_pos = NA    # suppress default legend
+)
+
+#— 7. Custom continuous legend with ticks at 2000, 4000, 6000
+mf_legend(
+  type   = "cont",
+  pos    = "right",
+  title  = "Service Area (sq km)",
+  val    = c(2000, 4000, 6000),
+  pal    = viridisLite::plasma(100, direction = -1)
+)
+
+#— 8. Overlay polygon boundaries for sharpness
+mf_map(
+  x      = thiessen_geo,
+  type   = "base",
+  col    = NA,  # No fill, just boundaries
+  border = "black",
+  lwd    = 0.2,
+  add    = TRUE
+)
+
+#— 9. Overlay boundary & accident locations
+mf_map(
+  x      = ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 0.5,
+  add    = TRUE
+)
+mf_map(
+  x      = ohio_accidents_geo,
+  type   = "base",
+  col    = "red",
+  pch    = 19,
+  cex    = 0.6,
+  add    = TRUE
+)
+
+#— 10. Add axes, north arrow, scale bar, and frame
+axis(1, at = lon_br, labels = lon_lb, cex.axis = 0.7)
+axis(2, at = lat_br, labels = lat_lb, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+
+
+
+print(service_area_stats)
+
+```
+
+
+
+
+
+```{r}
+# I am trying to identify duplicate coordinates and adding a small jitter to make them unique
+coords <- st_coordinates(ohio_accidents_sf)
+dup_indices <- which(duplicated(coords) | duplicated(coords, fromLast = TRUE))
+
+# I am creating  a copy of the accidents data that I can modify and avoid any overwriting
+ohio_accidents_jittered <- ohio_accidents_sf
+
+# so what I do here is I add a very small random offset to duplicated points (1m)
+# this is only for creating Thiessen polygons not for analysis
+if(length(dup_indices) > 0) {
+  jitter_coords <- coords[dup_indices,]
+  jitter_coords[,1] <- jitter_coords[,1] + runif(length(dup_indices), -1, 1)
+  jitter_coords[,2] <- jitter_coords[,2] + runif(length(dup_indices), -1, 1)
+  
+  # and then I replace the coordinates of duplicated points
+  jittered_points <- st_as_sf(as.data.frame(jitter_coords), 
+                            coords = c("X", "Y"), 
+                            crs = st_crs(ohio_accidents_sf))
+  
+  # and also I replace the geometries of duplicated points
+  st_geometry(ohio_accidents_jittered)[dup_indices] <- st_geometry(jittered_points)
+}
+
+
+# I am using the st_voronoi function with jittered points
+thiessen_geom <- st_voronoi(st_union(ohio_accidents_jittered))
+thiessen_sf <- st_collection_extract(thiessen_geom) %>%
+  st_intersection(st_union(ohio_boundary))
+
+# then I convert to sf data frame to add unique IDs
+thiessen_sf <- st_sf(geometry = thiessen_sf) %>%
+  mutate(thiessen_id = row_number())
+
+# and I find which accident point falls within which Thiessen polygon
+point_polygon_match <- st_intersects(ohio_accidents_sf, thiessen_sf)
+
+# here again I am creating a data frame linking accidents to Thiessen polygons
+accident_thiessen_map <- data.frame(
+  accident_index = 1:nrow(ohio_accidents_sf),
+  thiessen_index = sapply(point_polygon_match, function(x) ifelse(length(x) > 0, x[1], NA))
+)
+
+# and also I remove records that are without a matching polygon 
+accident_thiessen_map <- accident_thiessen_map[!is.na(accident_thiessen_map$thiessen_index),]
+
+# here I am calculating the area of each Thiessen polygon
+thiessen_sf$area_sq_km <- as.numeric(st_area(thiessen_sf)) / 1000000
+
+
+
+# and also the calculate basic statistics for the Thiessen polygons
+thiessen_stats <- data.frame(
+  Statistic = c("Number of Thiessen Polygons", 
+                "Minimum Area (sq km)", 
+                "Maximum Area (sq km)", 
+                "Mean Area (sq km)", 
+                "Median Area (sq km)", 
+                "Total Area (sq km)"),
+  Value = c(
+    nrow(thiessen_sf),
+    min(thiessen_sf$area_sq_km),
+    max(thiessen_sf$area_sq_km),
+    mean(thiessen_sf$area_sq_km),
+    median(thiessen_sf$area_sq_km),
+    sum(thiessen_sf$area_sq_km)
+  )
+)
+
+# Printing the statistics
+print(thiessen_stats)
+```
+
+
+```{r}
+# I am creating IDW interpolation for pipeline accident risk surface
+# First, I create a grid over Ohio
+ohio_grid <- st_make_grid(ohio_boundary, cellsize = 1000, square = TRUE) %>%
+  st_sf() %>%
+  st_intersection(ohio_boundary) %>%
+  mutate(grid_id = row_number())
+
+# For IDW, I need a value to interpolate for that 
+# I am using a  simple binary presence (1) for accident points
+ohio_accidents_sf$presence <- 1
+
+# and then I check the required format for gstat::idw
+str(ohio_grid)
+```
+
+
+```{r}
+# I create a simplified grid 
+ohio_grid_simple <- st_make_grid(ohio_boundary, cellsize = 5000, square = TRUE) %>%
+  st_sf() %>%
+  st_intersection(ohio_boundary) %>%
+  mutate(grid_id = row_number())
+
+# I first set up IDW interpolation so I can interpolate accident density rather than just presence
+# First, I count accidents per 10km grid cell to get density values for interpolation
+point_counts <- st_intersects(ohio_grid_simple, ohio_accidents_sf)
+ohio_grid_simple$accident_count <- lengths(point_counts)
+ohio_grid_simple$area_sqkm <- as.numeric(st_area(ohio_grid_simple)) / 1000000
+ohio_grid_simple$accident_density <- ohio_grid_simple$accident_count / ohio_grid_simple$area_sqkm
+
+# Then I create centroids of grid cells to use as base points for interpolation
+ohio_grid_centroids <- st_centroid(ohio_grid_simple)
+
+# and I create a regular grid for the IDW interpolation (prediction locations)
+idw_grid <- st_make_grid(ohio_boundary, cellsize = 2500, square = TRUE) %>%
+  st_sf() %>%
+  st_intersection(ohio_boundary)
+
+# then I convert to stars object for gstat
+idw_grid_stars <- st_as_stars(idw_grid)
+
+# Finally performing IDW interpolation
+library(gstat)
+idw_formula <- ohio_grid_centroids$accident_density ~ 1
+idw_model <- gstat::idw(formula = idw_formula, 
+                       locations = ohio_grid_centroids,
+                       newdata = idw_grid_stars, 
+                       idp = 2)  # idp is the power parameter (2 is standard)
+
+# and then I convert to sf for plotting
+idw_sf <- st_as_sf(idw_model)
+
+# map
+# Load necessary libraries
+library(sf)
+library(mapsf)
+
+# Transform data to appropriate projection
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+idw_sf_geo <- st_transform(idw_sf, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Define the quantile breaks that were missing
+# This creates 5 breaks (for 4 intervals) based on quantiles
+quant_breaks <- quantile(idw_sf_geo$var1.pred, probs = seq(0, 1, 0.25))
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 6))  # Adjusted margins to fit legend
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accident Risk Surface in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Plot IDW data directly using a simple choropleth approach
+# First, create a custom color palette matching your dens_pal
+# Use the same colors as in your original plot
+idw_colors <- c("#000080", "#800080", "#FF0080", "#FFA500", "#FFFF00")
+n_breaks <- length(quant_breaks) - 1
+idw_cols <- colorRampPalette(idw_colors)(n_breaks)
+
+# Add IDW interpolation without white spaces
+plot(st_geometry(idw_sf_geo), 
+     col = idw_cols[findInterval(idw_sf_geo$var1.pred, quant_breaks)],
+     border = NA,
+     add = TRUE)
+
+# Add Ohio boundary to clip edges
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# Plot accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "red",
+     pch = 16,
+     cex = 0.8,
+     add = TRUE)
+
+# Add subtitle
+mtext("Inverse Distance Weighted (IDW) Interpolation of Accident Density",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create a custom legend with proper decimal formatting
+# Format breaks with 3 decimal places
+legend_labels <- format(round(quant_breaks[-1], 3), nsmall = 3)
+legend("right", 
+       legend = legend_labels,
+       fill = idw_cols,
+       bty = "n",
+       cex = 0.8,
+       title = "Accident Density\n(per sq km)")
+
+# I am trying to calcualte stats for the IDW interpolation
+idw_stats <- data.frame(
+  Statistic = c("Minimum Density", "Maximum Density", "Mean Density", "Median Density"),
+  Value = c(
+    min(idw_sf$var1.pred, na.rm = TRUE),
+    max(idw_sf$var1.pred, na.rm = TRUE),
+    mean(idw_sf$var1.pred, na.rm = TRUE),
+    median(idw_sf$var1.pred, na.rm = TRUE)
+  )
+)
+
+# Printing the stats 
+print(idw_stats)
+```
+
+
+
+```{r}
+if(exists("ohio_tracts_sf")) {
+  head(names(ohio_tracts_sf))
+  nrow(ohio_tracts_sf)
+} else {
+  print("Ohio census tract data needs to be loaded")
+}
+```
+
+
+```{r}
+# Just trying to view the values and data
+names(ohio_tracts_sf)
+
+# Checking first few rows 
+head(ohio_tracts_sf, 5)
+
+# Checking the structure within the data
+str(ohio_tracts_sf)
+
+```
+
+
+
+
+```{r}
+
+county_data <- st_read("~/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp")
+colnames(county_data)
+# I am checking if idw_sf is properly structured
+if(exists("idw_sf")) {
+  head(idw_sf)
+}
+# so here I am trying to list objects that might contain population data
+ls()[grep("pop|census|tract|county", ls(), ignore.case = TRUE)]
+
+
+```
+ 
+```{r}
+# Here I am checking if I have product type information in my accident data
+colnames(ohio_accidents_sf)
+
+# so I can examine the unique values in any column related to products/commodities
+if("Commodity" %in% colnames(ohio_accidents_sf)) {
+  unique_commodities <- unique(ohio_accidents_sf$Commodity)
+  print("Unique commodity types:")
+  print(unique_commodities)
+  print(paste("Number of unique commodities:", length(unique_commodities)))
+  
+  # I am trying to count of accidents by commodity type
+  commodity_counts <- table(ohio_accidents_sf$Commodity)
+  print("Accident counts by commodity type:")
+  print(sort(commodity_counts, decreasing = TRUE))
+}
+```
+
+
+
+
+
+```{r}
+# I am trying to create a summary data frame for commodity analysis
+commodity_summary <- data.frame(
+  Commodity = names(sort(table(ohio_accidents_sf$Commodity), decreasing = TRUE)),
+  Count = as.numeric(sort(table(ohio_accidents_sf$Commodity), decreasing = TRUE)),
+  Percentage = as.numeric(sort(table(ohio_accidents_sf$Commodity), decreasing = TRUE)) / nrow(ohio_accidents_sf) * 100
+)
+
+# I am trying to generalise the classification for better ease of analysis later and also for visualisation
+commodity_summary$Category <- "Other"
+commodity_summary$Category[commodity_summary$Commodity %in% c("OIL", "GASOLINE", "DIESEL", "JET FUEL")] <- "Refined Petroleum"
+commodity_summary$Category[commodity_summary$Commodity %in% c("NATURAL GAS LIQUID", "LIQUIFIED GASES", "PROPANE")] <- "Gas/LNG"
+commodity_summary$Category[commodity_summary$Commodity == ""] <- "Unknown"
+
+# I am add the commodity type to my accidents data for mapping
+ohio_accidents_sf$commodity_category <- "Other"
+ohio_accidents_sf$commodity_category[ohio_accidents_sf$Commodity %in% c("OIL", "GASOLINE", "DIESEL", "JET FUEL")] <- "Refined Petroleum"
+ohio_accidents_sf$commodity_category[ohio_accidents_sf$Commodity %in% c("NATURAL GAS LIQUID", "LIQUIFIED GASES", "PROPANE")] <- "Gas/LNG"
+ohio_accidents_sf$commodity_category[ohio_accidents_sf$Commodity == ""] <- "Unknown"
+
+
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+
+par(mar = c(6, 8, 2, 2))
+
+
+commodity_plot <- commodity_summary[commodity_summary$Commodity != "", ]
+barplot(commodity_plot$Count,
+        names.arg = commodity_plot$Commodity,
+        horiz = TRUE,
+        col = "steelblue",
+        las = 1,
+        cex.names = 0.8,
+        main = "Pipeline Accidents by Commodity Type in Ohio",
+        xlab = "Number of Accidents")
+
+
+text(commodity_plot$Count + max(commodity_plot$Count)/20, 
+     seq(1.5, by = 1.2, length.out = nrow(commodity_plot)) - 0.5,
+     paste0(round(commodity_plot$Percentage, 1), "%"),
+     cex = 0.7)
+
+
+par(mar = c(3, 3, 2, 1))
+
+
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents by Commodity Type in Ohio")
+
+
+bbox <- st_bbox(ohio_boundary_geo)
+
+
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+
+commodity_colors <- c("Refined Petroleum" = "red", "Gas/LNG" = "blue", "Unknown" = "gray", "Other" = "green")
+
+
+point_colors <- commodity_colors[ohio_accidents_geo$commodity_category]
+
+
+plot(st_geometry(ohio_accidents_geo),
+     col = point_colors,
+     pch = 16,
+     cex = 1,
+     add = TRUE)
+
+
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     add = TRUE)
+
+
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+
+mf_arrow(pos = "topleft", col = "black")
+
+
+mf_scale(pos = "bottomleft")
+
+
+box()
+
+
+legend("bottomright", 
+       legend = names(commodity_colors),
+       col = commodity_colors,
+       pch = 16,
+       bty = "n",
+       cex = 0.8,
+       title = "Commodity Type")
+
+# I am trying to do an easy Temporal analysis where I am looking at commodity types over time
+
+par(mar = c(4, 4, 2, 1))
+
+
+decade_commodity <- table(ohio_accidents_sf$Decade, ohio_accidents_sf$Commodity)
+
+# I am calculating the percentage within each decade
+decade_commodity_pct <- prop.table(decade_commodity, margin = 1) * 100
+
+# then I convert to data frame for plotting
+decade_commodity_df <- as.data.frame.matrix(decade_commodity)
+decade_commodity_pct_df <- as.data.frame.matrix(decade_commodity_pct)
+
+# and I Print the results
+print("Commodity types by decade (count):")
+print(decade_commodity)
+
+print("Commodity types by decade (percentage within decade):")
+print(round(decade_commodity_pct, 1))
+
+# also I am calculating an average age of pipeline by commodity type
+avg_age_by_commodity <- aggregate(Age..yrs. ~ Commodity, 
+                                 data = st_drop_geometry(ohio_accidents_sf), 
+                                 FUN = function(x) mean(x, na.rm = TRUE))
+
+# and sort it by order by average age
+avg_age_by_commodity <- avg_age_by_commodity[order(-avg_age_by_commodity$Age..yrs.), ]
+
+# and Print the results
+print("Average pipeline age at time of accident by commodity type:")
+print(avg_age_by_commodity)
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+ohio_tracts_boundaries <- st_read("~/Assignment/cb_2019_39_tract_500k/cb_2019_39_tract_500k.shp")
+
+# I am trying to check which objects exist with population data
+exists("ohio_pop")
+exists("total_ohio_pop")
+exists("population_3km")
+
+# and then I am creating a population estimate based on land area since I don't have actual census data due to server issue
+ohio_tracts_boundaries$population <- as.numeric(ohio_tracts_boundaries$ALAND) / 1e6
+
+# then I transform to match the CRS of my risk data
+ohio_tracts_boundaries <- st_transform(ohio_tracts_boundaries, st_crs(idw_sf))
+
+# Check if the population column was created successfully
+head(ohio_tracts_boundaries$population)
+
+# now first  I am trying to create a simpler risk area analysis without population
+risk_threshold <- quantile(idw_sf$var1.pred, 0.90, na.rm = TRUE)
+high_risk_areas <- idw_sf %>%
+  dplyr::filter(var1.pred >= risk_threshold) %>%
+  st_union() %>%
+  st_sf()
+
+mod_risk_threshold <- quantile(idw_sf$var1.pred, 0.70, na.rm = TRUE)
+mod_risk_areas <- idw_sf %>%
+  dplyr::filter(var1.pred >= mod_risk_threshold & var1.pred < risk_threshold) %>%
+  st_union() %>%
+  st_sf()
+
+# then I calculate areas
+high_risk_area <- sum(as.numeric(st_area(high_risk_areas))) / 1000000  # sq km
+mod_risk_area <- sum(as.numeric(st_area(mod_risk_areas))) / 1000000    # sq km
+ohio_area <- sum(as.numeric(st_area(ohio_boundary))) / 1000000         # sq km
+
+# then I compile the list of  calculated risk areas 
+risk_area_summary <- data.frame(
+  Risk_Zone = c("High Risk", "Moderate Risk", "All of Ohio"),
+  Area_Sq_Km = c(high_risk_area, mod_risk_area, ohio_area),
+  Area_Percent = c(high_risk_area / ohio_area * 100,
+                  mod_risk_area / ohio_area * 100,
+                  100)
+)
+
+print("Risk Zone Area Statistics:")
+print(risk_area_summary)
+
+# Then I am calculating population density using my estimated population findings 
+ohio_tracts_boundaries$pop_density <- ohio_tracts_boundaries$population / 
+  (as.numeric(st_area(ohio_tracts_boundaries)) / 1000000)  # per sq km
+
+
+```
+
+
+```{r}
+# I am trying to check if I can access the Ohio population from one of my existing objects
+ls()[grep("populat|ohio_pop", ls())]
+
+# So I am checking if I have population_3km or other population objects
+if(exists("population_3km")) {
+  head(population_3km)
+}
+
+# I am checking if ohio_tracts_sf has other columns that I  could use
+if(exists("ohio_tracts_sf")) {
+  colnames(ohio_tracts_sf)
+}
+
+
+library(tidycensus)
+tryCatch({
+  ohio_tracts_data <- get_acs(
+    geography = "tract",
+    variables = "B01003_001", 
+    state = "OH",
+    year = 2019,
+    geometry = FALSE
+  )
+  
+  # I am doing another join with  population data to the boundary file
+  ohio_tracts_boundaries$estimate <- ohio_tracts_data$estimate[match(ohio_tracts_boundaries$GEOID, ohio_tracts_data$GEOID)]
+  
+  # map
+  library(sf)
+library(mapsf)
+library(viridisLite)
+
+# First calculate population density for the tracts
+# This assumes ohio_tracts_sf already has the 'estimate' column for population
+ohio_tracts_sf$pop_density <- ohio_tracts_sf$estimate / as.numeric(st_area(ohio_tracts_sf)) * 1000000
+
+# Transform everything to WGS84 for consistent coordinate display
+ohio_tracts_geo <- st_transform(ohio_tracts_sf, 4326)
+high_risk_areas_geo <- st_transform(high_risk_areas, 4326)
+mod_risk_areas_geo <- st_transform(mod_risk_areas, 4326)
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+
+# Compute gridlines & labels
+bbox <- st_bbox(ohio_boundary_geo)
+lon_br <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_br <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_lb <- paste0(abs(round(lon_br,2)), "°", ifelse(lon_br<0,"W","E"))
+lat_lb <- paste0(abs(round(lat_br,2)), "°", ifelse(lat_br<0,"N","N"))
+
+# Set up the plot with margins for the legend
+# Increase top margin to allow space for title and subtitle
+par(mar = c(3,3,3,6))  # Increased top margin from 2 to 3
+
+# Draw base map with title and grid
+plot(
+  st_geometry(ohio_boundary_geo),
+  col = NA,
+  border = NA,
+  axes = FALSE,
+  main = "Population Exposure to Pipeline Accident Risk in Ohio",
+  cex.main = 1.2
+)
+
+# Add subtitle with more space below the main title
+mtext("Area-weighted interpolation of population in high and moderate risk zones", 
+      side = 3, line = 0.3, cex = 0.8)  # Increased line from 0.2 to 0.8
+
+# Add grid lines
+for(x in lon_br) abline(v = x, col = "grey90", lty = 2)
+for(y in lat_br) abline(h = y, col = "grey90", lty = 2)
+
+# Create logarithmic breaks for population density
+# Get min/max values, skipping any zero or NA values
+min_density <- min(ohio_tracts_geo$pop_density[ohio_tracts_geo$pop_density > 0], na.rm = TRUE)
+max_density <- max(ohio_tracts_geo$pop_density, na.rm = TRUE)
+
+# Create breaks that match the ggplot example (approximately)
+# Using powers of 10 for better readability
+log_breaks <- c(5, 19, 68, 243, 876, 3153, 11348)
+
+# Create matching color palette - using the plasma palette in reverse
+# to match the viridis colormap in the ggplot example
+viridis_pal <- viridisLite::viridis(100, option = "viridis")
+dens_pal <- viridis_pal[seq(1, 100, length.out = length(log_breaks) - 1)]
+
+# Plot population density
+mf_map(
+  x = ohio_tracts_geo,
+  var = "pop_density",
+  type = "choro",
+  breaks = log_breaks,
+  pal = dens_pal,
+  border = NA,
+  add = TRUE,
+  leg_pos = NA
+)
+
+# Add risk zones with increased transparency
+# Use more transparent colors for risk areas
+mf_map(
+  x = mod_risk_areas_geo,
+  type = "base",
+  col = adjustcolor("#FFA500", alpha.f = 0.5),  # orange with more transparency
+  border = adjustcolor("#FFA500", alpha.f = 0.7),
+  lwd = 0.5,
+  add = TRUE
+)
+
+mf_map(
+  x = high_risk_areas_geo,
+  type = "base",
+  col = adjustcolor("#FF0000", alpha.f = 0.5),  # red with more transparency 
+  border = adjustcolor("#FF0000", alpha.f = 0.7),
+  lwd = 0.5,
+  add = TRUE
+)
+
+# Add Ohio boundary
+mf_map(
+  x = ohio_boundary_geo,
+  type = "base",
+  col = NA,
+  border = "black",
+  lwd = 0.5,
+  add = TRUE
+)
+
+# Add axes with labels
+axis(1, at = lon_br, labels = lon_lb, cex.axis = 0.7)
+axis(2, at = lat_br, labels = lat_lb, cex.axis = 0.7)
+
+# Add north arrow and scale bar
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+
+# Add box around the map
+box()
+
+# Add legend for population density on the right
+mf_legend(
+  type = "choro",
+  title = "Population\nDensity\n(per sq km)",
+  val = log_breaks,
+  pal = dens_pal,
+  pos = "right",
+  frame = TRUE
+)
+
+# Add legend for risk zones at bottom right
+legend(
+  "bottomright",
+  legend = c("High Risk", "Moderate Risk"),
+  fill = c(adjustcolor("#FF0000", alpha.f = 0.5), adjustcolor("#FFA500", alpha.f = 0.5)),
+  border = c(adjustcolor("#FF0000", alpha.f = 0.7), adjustcolor("#FFA500", alpha.f = 0.7)),
+  box.lty = 1,
+  bg = "white"
+)
+```
+
+
+
+
+
+
+
+```{r}
+
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)
+library(terra)
+library(FedData)
+
+
+ohio_boundary <- states(cb = TRUE, year = 2021) %>%
+  filter(STUSPS == "OH") %>%
+  st_transform(4326)
+
+
+nlcd_api_raster <- get_nlcd(
+  template       = ohio_boundary,
+  year           = 2016,
+  dataset        = "landcover",
+  label          = "nlcd_api_ohio",
+  extraction.dir = "~/Assignment/nlcd_api_download",
+  force.redo     = FALSE
+)
+
+
+nlcd_26917 <- project(nlcd_api_raster, "EPSG:26917")
+
+
+ohio_boundary_26917 <- st_transform(ohio_boundary, 26917)
+
+
+ohio_vect_26917 <- vect(ohio_boundary_26917)
+
+
+nlcd_clipped <- crop(nlcd_26917, ohio_vect_26917)
+nlcd_clipped <- mask(nlcd_clipped, ohio_vect_26917)
+
+
+plot(nlcd_clipped,
+     main = "Land Cover Land Use Map of Ohio",
+     axes = FALSE)          
+plot(st_geometry(ohio_boundary_26917),
+     add    = TRUE,
+     border = "black")     
+
+```
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Load necessary libraries
+library(sf)
+library(mapsf)
+
+# Transform data to geographic CRS (WGS84) for lat/long display
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents in Ohio by Incident Type")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Define colors for different incident types
+# Get unique incident types
+incident_types <- unique(ohio_accidents_geo$Incident.Type)
+incident_colors <- c("hazardous" = "red", 
+                     "distribution" = "blue", 
+                     "transmission" = "green",
+                     "gathering" = "purple",
+                     "other" = "orange")
+
+# For any incident types not in our predefined list, assign "grey"
+for(type in incident_types) {
+  if(!type %in% names(incident_colors)) {
+    incident_colors[type] <- "grey"
+  }
+}
+
+# Create a color vector based on incident types
+point_colors <- incident_colors[ohio_accidents_geo$Incident.Type]
+
+# Plot accident points colored by incident type
+plot(st_geometry(ohio_accidents_geo),
+     col = point_colors,
+     pch = 16,
+     cex = 1,
+     add = TRUE)
+
+# Add Ohio boundary to clean/clip edges
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     add = TRUE)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add legend for incident types
+legend("bottomright", 
+       legend = names(incident_colors),
+       col = incident_colors,
+       pch = 16,
+       bty = "n",
+       cex = 0.8,
+       title = "Incident Type")
+```
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Transform to geographic CRS for mapping
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_grid_geo <- st_transform(ohio_grid, 4326)
+
+# Define cluster type colors
+cluster_colors <- c(
+  "High-High" = "red",
+  "Low-Low" = "blue",
+  "High-Low" = "pink",
+  "Low-High" = "lightblue",
+  "Not Significant" = "white"
+)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Local Indicators of Spatial Association (LISA)")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Create color vector based on cluster type
+grid_colors <- cluster_colors[as.character(ohio_grid_geo$cluster_type)]
+
+# Plot the grid cells with appropriate colors AND visible borders
+plot(st_geometry(ohio_grid_geo), 
+     col = grid_colors,
+     border = "grey80",  # Add light grey borders to make grid cells visible
+     lwd = 0.2,          # Thin line width for grid borders
+     add = TRUE)
+
+# Add Ohio boundary on top to clean up edges
+plot(st_geometry(ohio_boundary_geo), 
+     col = NA,
+     border = "black",
+     lwd = 1,            # Thicker line for Ohio boundary
+     add = TRUE)
+
+# Add manual axes with latitude/longitude labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add subtitle
+mtext("Pipeline Accidents in Ohio", 
+      side = 3, 
+      line = -1, 
+      cex = 0.8)
+
+# Add legend
+legend("bottomright", 
+       legend = names(cluster_colors),
+       fill = cluster_colors,
+       border = NA,
+       bty = "n",
+       cex = 0.8,
+       title = "Cluster Type")
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Load necessary libraries
+library(sf)
+library(mapsf)
+
+# First, let's transform our data to a geographic CRS (WGS84) for lat/long display
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,  # Turn off automatic axes
+     main = "Pipeline Accidents in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels nicely (degrees symbol)
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Now add Ohio boundary
+plot(st_geometry(ohio_boundary_geo), 
+     col = "white", 
+     border = "black",
+     add = TRUE)
+
+# Add accident points
+plot(st_geometry(ohio_accidents_geo), 
+     col = "red", 
+     pch = 16, 
+     cex = 0.8,
+     add = TRUE)
+
+# Add manual axes with latitude/longitude labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# 5) Scale bar
+mf_scale(
+  pos = "bottomleft"
+)
+
+
+# Add box around the plot area
+box()
+```
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)
+library(mapsf)
+library(viridisLite)
+
+# First calculate population density for the tracts
+# This assumes ohio_tracts_sf already has the 'estimate' column for population
+ohio_tracts_sf$pop_density <- ohio_tracts_sf$estimate / as.numeric(st_area(ohio_tracts_sf)) * 1000000
+
+# Transform everything to WGS84 for consistent coordinate display
+ohio_tracts_geo <- st_transform(ohio_tracts_sf, 4326)
+high_risk_areas_geo <- st_transform(high_risk_areas, 4326)
+mod_risk_areas_geo <- st_transform(mod_risk_areas, 4326)
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+
+# Compute gridlines & labels
+bbox <- st_bbox(ohio_boundary_geo)
+lon_br <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_br <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_lb <- paste0(abs(round(lon_br,2)), "°", ifelse(lon_br<0,"W","E"))
+lat_lb <- paste0(abs(round(lat_br,2)), "°", ifelse(lat_br<0,"N","N"))
+
+# Set up the plot with margins for the legend
+# Increase top margin to allow space for title and subtitle
+par(mar = c(3,3,3,6))  # Increased top margin from 2 to 3
+
+# Draw base map with title and grid
+plot(
+  st_geometry(ohio_boundary_geo),
+  col = NA,
+  border = NA,
+  axes = FALSE,
+  main = "Population Exposure to Pipeline Accident Risk in Ohio",
+  cex.main = 1.2
+)
+
+# Add subtitle with more space below the main title
+mtext("Area-weighted interpolation of population in high and moderate risk zones", 
+      side = 3, line = 0.3, cex = 0.8)  # Increased line from 0.2 to 0.8
+
+# Add grid lines
+for(x in lon_br) abline(v = x, col = "grey90", lty = 2)
+for(y in lat_br) abline(h = y, col = "grey90", lty = 2)
+
+# Create logarithmic breaks for population density
+# Get min/max values, skipping any zero or NA values
+min_density <- min(ohio_tracts_geo$pop_density[ohio_tracts_geo$pop_density > 0], na.rm = TRUE)
+max_density <- max(ohio_tracts_geo$pop_density, na.rm = TRUE)
+
+# Create breaks that match the ggplot example (approximately)
+# Using powers of 10 for better readability
+log_breaks <- c(5, 19, 68, 243, 876, 3153, 11348)
+
+# Create matching color palette - using the plasma palette in reverse
+# to match the viridis colormap in the ggplot example
+viridis_pal <- viridisLite::viridis(100, option = "viridis")
+dens_pal <- viridis_pal[seq(1, 100, length.out = length(log_breaks) - 1)]
+
+# Plot population density
+mf_map(
+  x = ohio_tracts_geo,
+  var = "pop_density",
+  type = "choro",
+  breaks = log_breaks,
+  pal = dens_pal,
+  border = NA,
+  add = TRUE,
+  leg_pos = NA
+)
+
+# Add risk zones with increased transparency
+# Use more transparent colors for risk areas
+mf_map(
+  x = mod_risk_areas_geo,
+  type = "base",
+  col = adjustcolor("#FFA500", alpha.f = 0.5),  # orange with more transparency
+  border = adjustcolor("#FFA500", alpha.f = 0.7),
+  lwd = 0.5,
+  add = TRUE
+)
+
+mf_map(
+  x = high_risk_areas_geo,
+  type = "base",
+  col = adjustcolor("#FF0000", alpha.f = 0.5),  # red with more transparency 
+  border = adjustcolor("#FF0000", alpha.f = 0.7),
+  lwd = 0.5,
+  add = TRUE
+)
+
+# Add Ohio boundary
+mf_map(
+  x = ohio_boundary_geo,
+  type = "base",
+  col = NA,
+  border = "black",
+  lwd = 0.5,
+  add = TRUE
+)
+
+# Add axes with labels
+axis(1, at = lon_br, labels = lon_lb, cex.axis = 0.7)
+axis(2, at = lat_br, labels = lat_lb, cex.axis = 0.7)
+
+# Add north arrow and scale bar
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+
+# Add box around the map
+box()
+
+# Add legend for population density on the right
+mf_legend(
+  type = "choro",
+  title = "Population\nDensity\n(per sq km)",
+  val = log_breaks,
+  pal = dens_pal,
+  pos = "right",
+  frame = TRUE
+)
+
+# Add legend for risk zones at bottom right
+legend(
+  "bottomright",
+  legend = c("High Risk", "Moderate Risk"),
+  fill = c(adjustcolor("#FF0000", alpha.f = 0.5), adjustcolor("#FFA500", alpha.f = 0.5)),
+  border = c(adjustcolor("#FF0000", alpha.f = 0.7), adjustcolor("#FFA500", alpha.f = 0.7)),
+  box.lty = 1,
+  bg = "white"
+)
+```
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Water Proximity Map
+# Transform water data to geographic CRS
+nhd_waterbodies_ohio_geo <- st_transform(nhd_waterbodies_ohio, 4326)
+nhd_flowline_ohio_geo <- st_transform(nhd_flowline_ohio, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents Near Water Resources in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Add water features
+plot(st_geometry(nhd_waterbodies_ohio_geo),
+     col = "lightblue",
+     border = NA,
+     add = TRUE)
+
+plot(st_geometry(nhd_flowline_ohio_geo),
+     col = "blue",
+     lwd = 0.6,
+     add = TRUE)
+
+# Add Ohio boundary 
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     add = TRUE)
+
+# Define colors for water proximity categories
+prox_colors <- c("Near Both" = "purple", 
+                 "Near Waterbody Only" = "darkblue",
+                 "Near Flowline Only" = "darkgreen",
+                 "Not Near Water" = "red")
+
+# Plot accident points colored by water proximity
+# We need to split by category and plot each separately
+for(cat in names(prox_colors)) {
+  cat_points <- ohio_accidents_geo[ohio_accidents_geo$water_proximity == cat, ]
+  if(nrow(cat_points) > 0) {
+    plot(st_geometry(cat_points),
+         col = prox_colors[cat],
+         pch = 16,
+         cex = 1,
+         add = TRUE)
+  }
+}
+
+# Add axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add legend for water proximity categories
+legend("bottomright", 
+       legend = names(prox_colors),
+       col = unname(prox_colors),
+       pch = 16,
+       pt.cex = 1,
+       bty = "n",
+       cex = 0.8,
+       title = "Water Proximity")
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Buffer Analysis for Exposure Zones
+# Create larger buffers for better visualization
+# Scaling up the buffer distances while maintaining their relative proportions
+buffer_500m <- st_buffer(ohio_accidents_sf, 5000)  # 10x larger for visibility
+buffer_1km <- st_buffer(ohio_accidents_sf, 10000)  # 10x larger for visibility
+buffer_3km <- st_buffer(ohio_accidents_sf, 30000)  # 10x larger for visibility
+
+# Transform data to geographic CRS (WGS84) for lat/long display
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+buffer_500m_geo <- st_transform(buffer_500m, 4326)
+buffer_1km_geo <- st_transform(buffer_1km, 4326)
+buffer_3km_geo <- st_transform(buffer_3km, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Exposure Zones Around Pipeline Accidents in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Plot buffer zones first (BEFORE accident points)
+# 3km zone (yellow) - now much larger
+plot(st_geometry(buffer_3km_geo),
+     col = rgb(1, 1, 0, 0.2),    # Yellow with transparency
+     border = NA,
+     add = TRUE)
+
+# 1km zone (orange) - now much larger
+plot(st_geometry(buffer_1km_geo),
+     col = rgb(1, 0.65, 0, 0.3), # Orange with transparency
+     border = NA,
+     add = TRUE)
+
+# 500m zone (red) - now much larger
+plot(st_geometry(buffer_500m_geo),
+     col = rgb(1, 0, 0, 0.4),    # Red with transparency
+     border = NA,
+     add = TRUE)
+
+# Add Ohio boundary to clean/clip edges
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# AFTER buffer zones, plot accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "black",
+     pch = 16,
+     cex = 0.4,  # Kept points small
+     add = TRUE)
+
+# Update subtitle to explain the scaling
+mtext("Buffer distances (scaled for visibility): 500m (red), 1km (orange), 3km (yellow)",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create a proper legend with only buffer zones
+legend("bottomright", 
+       legend = c("3km Buffer Zone", "1km Buffer Zone", "500m Buffer Zone"),
+       fill = c(rgb(1, 1, 0, 0.2), rgb(1, 0.65, 0, 0.3), rgb(1, 0, 0, 0.4)),
+       border = "black",
+       bty = "n",
+       cex = 0.8,
+       title = "Exposure Zones")
+```
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Transform data to geographic CRS (WGS84) for lat/long display
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+std_circle_geo <- st_transform(std_circle, 4326)
+
+# Transform mean center and calculate axes in geographic coordinates
+mean_center_geo <- st_coordinates(st_centroid(st_union(ohio_accidents_geo)))
+
+# Transform the axes calculations to geographic space
+# Get the original angle and distances
+coords_geo <- st_coordinates(ohio_accidents_geo)
+cov_matrix_geo <- cov(coords_geo)
+eigen_result_geo <- eigen(cov_matrix_geo)
+eigen_vectors_geo <- eigen_result_geo$vectors
+eigen_values_geo <- eigen_result_geo$values
+angle_geo <- atan2(eigen_vectors_geo[2,1], eigen_vectors_geo[1,1])
+
+# Calculate major and minor axes in geographic coordinates
+major_axis_geo <- sqrt(eigen_values_geo[1]) * 2
+minor_axis_geo <- sqrt(eigen_values_geo[2]) * 2
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Directional Distribution of Pipeline Accidents in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Plot the standard distance circle
+plot(st_geometry(std_circle_geo),
+     col = NA,
+     border = "blue",
+     lwd = 1,
+     add = TRUE)
+
+# Add the major axis arrow
+arrows(
+  mean_center_geo[1], mean_center_geo[2],
+  mean_center_geo[1] + cos(angle_geo) * major_axis_geo,
+  mean_center_geo[2] + sin(angle_geo) * major_axis_geo,
+  col = "darkblue", lwd = 2, length = 0.10
+)
+
+# Add the minor axis arrow
+arrows(
+  mean_center_geo[1], mean_center_geo[2],
+  mean_center_geo[1] + cos(angle_geo + pi/2) * minor_axis_geo,
+  mean_center_geo[2] + sin(angle_geo + pi/2) * minor_axis_geo,
+  col = "darkgreen", lwd = 2, length = 0.10
+)
+
+# Add Ohio boundary
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# Plot the accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "red",
+     pch = 16,
+     cex = 1.5,
+     add = TRUE)
+
+# Add subtitle
+mtext("Mean Center, Standard Distance, and Principal Axes",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add a custom legend
+legend("bottomright", 
+       legend = c("Accident Locations", "Standard Distance", "Major Axis", "Minor Axis"),
+       col = c("red", "blue", "darkblue", "darkgreen"),
+       pch = c(16, NA, NA, NA),
+       lty = c(NA, 1, 1, 1),
+       lwd = c(NA, 1, 2, 2),
+       pt.cex = 1.5,
+       bty = "n",
+       cex = 0.8,
+       title = "Map Elements")
+```
+
+
+```{r}
+
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)
+library(spatstat)   # for ppp & density.ppp
+library(sp)         # for CRS()/proj4string()
+library(terra)      # for SpatRaster
+library(mapsf)      # for the mapping functions
+library(raster)     # for raster operations
+
+# 1) build the point pattern & 5 km KDE in UTM --------------------------------
+ohio_utm     <- st_transform(ohio_boundary, 26917)
+ohio_acc_utm <- st_transform(ohio_accidents_sf, 26917)
+ohio_win <- as.owin(st_geometry(ohio_utm))
+coords   <- st_coordinates(ohio_acc_utm)
+suppressWarnings({
+  ohio_ppp <- ppp(coords[,1], coords[,2], window = ohio_win, check = FALSE)
+})
+ohio_density <- density.ppp(ohio_ppp, sigma = 5000, edge = TRUE)
+
+# 2) get back to geographic for sf plotting ----------------------------------
+ohio_bound_geo <- st_transform(ohio_boundary, 4326)
+ohio_acc_geo   <- st_transform(ohio_accidents_sf, 4326)
+
+# 3) convert the KDE ("im" object) into a terra SpatRaster -------------------
+sgdf <- as(ohio_density, "SpatialGridDataFrame")
+proj4string(sgdf) <- st_crs(26917)$proj4string   # tell it "this is UTM"
+
+# Convert to a raster object (raster package) for better control
+r <- raster(sgdf)
+
+# Apply log transformation to match the reference map
+r_log <- calc(r, fun = function(x) log10(x * 100 + 1))
+
+# Project to WGS84
+r_wgs84 <- projectRaster(r_log, crs = st_crs(4326)$proj4string)
+
+# Create a mask from Ohio to constrain the KDE display
+ohio_sp <- as(ohio_bound_geo, "Spatial")
+r_masked <- mask(r_wgs84, ohio_sp)
+
+# 4) colour ramp --------------------------------------------------------------
+density_cols <- colorRampPalette(
+  c("navy", "blue", "purple", "red", "orange", "yellow")
+)(100)
+
+# 5) draw the map with base R for better control -----------------------------
+# Set margins to match reference
+par(mar = c(3, 3, 2, 6))  # room for right-hand legend & title
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_bound_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_bound_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 1), "°W")
+lat_labels <- paste0(round(lat_breaks, 1), "°N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Fill Ohio with white as the base layer
+plot(st_geometry(ohio_bound_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Plot the masked raster directly - the simpler approach that works
+plot(r_masked, 
+     col = density_cols, 
+     add = TRUE, 
+     legend = FALSE)
+
+# Add Ohio boundary again with a clean black line
+plot(st_geometry(ohio_bound_geo),
+     col = NA,
+     border = "black",
+     lwd = 1,
+     add = TRUE)
+
+# Add accident points
+plot(st_geometry(ohio_acc_geo),
+     col = "red",
+     pch = 16,
+     cex = 0.7,
+     add = TRUE)
+
+# Add title and subtitle separately for better control
+title("Kernel Density of Pipeline Accidents in Ohio", cex.main = 1.2)
+mtext("Smoothed with 5km Gaussian Kernel (log scale)", 
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow (using mapsf)
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar (using mapsf)
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create the tick-style legend
+par(xpd = TRUE)  # Allow plotting outside the plot region
+
+# Calculate legend position based on the plot dimensions
+usr <- par("usr")  # Get the plot region coordinates
+legend_x <- usr[2] + 0.05 * (usr[2] - usr[1])
+legend_y_bottom <- usr[3] + 0.25 * (usr[4] - usr[3])
+legend_y_top <- usr[3] + 0.75 * (usr[4] - usr[3])
+legend_width <- 0.02 * (usr[2] - usr[1])
+
+# Draw the legend color bar
+y_positions <- seq(legend_y_bottom, legend_y_top, length.out = 101)
+for (i in 1:100) {
+  rect(legend_x, y_positions[i], legend_x + legend_width, y_positions[i+1],
+       col = density_cols[i], border = NA)
+}
+
+# Add a border around the color bar
+rect(legend_x, legend_y_bottom, legend_x + legend_width, legend_y_top, 
+     col = NULL, border = "black")
+
+# Create custom legend labels
+tick_positions <- seq(legend_y_bottom, legend_y_top, length.out = 5)
+tick_labels <- c("0.0", "", "0.1", "", "0.3")  # Values from the reference image
+
+# Draw tick marks and labels
+segments(legend_x + legend_width, tick_positions, 
+         legend_x + legend_width + 0.01 * (usr[2] - usr[1]), tick_positions)
+text(legend_x + legend_width + 0.015 * (usr[2] - usr[1]), 
+     tick_positions, tick_labels, adj = 0, cex = 0.7)
+
+# Add legend title
+text(legend_x + legend_width/2, legend_y_top + 0.05 * (usr[4] - usr[3]), 
+     "KDE\n(log scale)", adj = c(0.5, 0), cex = 0.8)
+
+par(xpd = FALSE)  # Reset to not plot outside the plot region
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Clear environment and reset plot parameters
+par(mfrow=c(1,1), mar=c(3,3,2,1))
+
+# Create buffers around the points - using sizes from your successful example
+buffer_500m <- st_buffer(ohio_accidents_sf, 5000)  # 10x larger for visibility
+buffer_100m <- st_buffer(ohio_accidents_sf, 2000)  # 20x larger for visibility
+
+# Transform to WGS84
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+buffer_500m_geo <- st_transform(buffer_500m, 4326)
+buffer_100m_geo <- st_transform(buffer_100m, 4326)
+
+# Set up the plotting area
+plot(st_geometry(ohio_boundary_geo),
+     col = "white", 
+     border = NA,
+     main = "Pipeline Accidents in Relation to Water Resources",
+     axes = FALSE)
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Plot the 500m buffer with light blue
+plot(st_geometry(buffer_500m_geo),
+     col = rgb(0.7, 0.9, 1, 0.2),  # Light blue with transparency
+     border = NA,
+     add = TRUE)
+
+# Plot the 100m buffer with darker blue
+plot(st_geometry(buffer_100m_geo),
+     col = rgb(0.1, 0.6, 1, 0.4),  # Darker blue with transparency
+     border = NA,
+     add = TRUE)
+
+# Add Ohio boundary to clip any overflow
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# Add subtitle
+mtext("100m and 500m buffers around accident locations (scaled for visibility)", 
+      side = 3, line = -0.3, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create legend with just the buffer zones
+legend("bottomright", 
+       legend = c("500m Buffer Zone", "100m Buffer Zone"),
+       fill = c(rgb(0.7, 0.9, 1, 0.2), rgb(0.1, 0.6, 1, 0.4)),
+       border = "black",
+       bty = "n",
+       cex = 0.8,
+       title = "Buffer Zones")
+```
+
+
+
+```{r}
+
+```
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Transform the data to geographic CRS for display
+ohio_tracts_geo <- st_transform(ohio_tracts_sf, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 6))  # Extra space on the right for the legend
+
+# Define breaks and colors for population density (log scale)
+pop_breaks <- c(0, 10, 100, 1000, 10000, max(ohio_tracts_geo$pop_density, na.rm = TRUE))
+# Create a color palette matching viridis
+viridis_colors <- viridisLite::viridis(5)
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_tracts_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents and Population Density in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_tracts_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Plot the population density choropleth
+plot(st_geometry(ohio_tracts_geo),
+     col = viridis_colors[findInterval(ohio_tracts_geo$pop_density, pop_breaks)],
+     border = NA,
+     add = TRUE)
+
+# Add tract boundaries (very light)
+plot(st_geometry(ohio_tracts_geo),
+     col = NA,
+     border = "#FFFFFF20",  # Very light white with transparency
+     lwd = 0.1,
+     add = TRUE)
+
+# Plot the accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "red",
+     pch = 16,
+     cex = 0.8,
+     add = TRUE)
+
+# Add subtitle
+mtext("Population density (people per sq km) with accident locations",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create a custom legend for population density
+legend_title <- "Population\nDensity"
+legend_labels <- c("10", "100", "1,000", "10,000")
+legend("right", 
+       legend = legend_labels,
+       fill = viridis_colors,
+       border = "#FFFFFF20",
+       bty = "n",
+       cex = 0.8,
+       title = legend_title)
+```
+
+
+
+```{r}
+
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Load necessary libraries
+library(sf)
+library(mapsf)
+
+# Transform data to appropriate projection
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+idw_sf_geo <- st_transform(idw_sf, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Define the quantile breaks that were missing
+# This creates 5 breaks (for 4 intervals) based on quantiles
+quant_breaks <- quantile(idw_sf_geo$var1.pred, probs = seq(0, 1, 0.25))
+
+# Set up the plotting area
+par(mar = c(3, 3, 2, 6))  # Adjusted margins to fit legend
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accident Risk Surface in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Plot IDW data directly using a simple choropleth approach
+# First, create a custom color palette matching your dens_pal
+# Use the same colors as in your original plot
+idw_colors <- c("#000080", "#800080", "#FF0080", "#FFA500", "#FFFF00")
+n_breaks <- length(quant_breaks) - 1
+idw_cols <- colorRampPalette(idw_colors)(n_breaks)
+
+# Add IDW interpolation without white spaces
+plot(st_geometry(idw_sf_geo), 
+     col = idw_cols[findInterval(idw_sf_geo$var1.pred, quant_breaks)],
+     border = NA,
+     add = TRUE)
+
+# Add Ohio boundary to clip edges
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     lwd = 0.5,
+     add = TRUE)
+
+# Plot accident points
+plot(st_geometry(ohio_accidents_geo),
+     col = "red",
+     pch = 16,
+     cex = 0.8,
+     add = TRUE)
+
+# Add subtitle
+mtext("Inverse Distance Weighted (IDW) Interpolation of Accident Density",
+      side = 3, line = -0.1, cex = 0.8)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Create a custom legend with proper decimal formatting
+# Format breaks with 3 decimal places
+legend_labels <- format(round(quant_breaks[-1], 3), nsmall = 3)
+legend("right", 
+       legend = legend_labels,
+       fill = idw_cols,
+       bty = "n",
+       cex = 0.8,
+       title = "Accident Density\n(per sq km)")
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)
+library(mapsf)
+library(viridisLite)
+library(dplyr)
+library(forcats)
+
+#— 1. Make sure your sf object has that sensitivity factor,
+#     and convert ANY remaining NAs into "Unknown":
+ohio_accidents_sf <- ohio_accidents_sf %>%
+  mutate(
+    sensitivity = fct_explicit_na(
+      sensitivity,
+      na_level = "Unknown"
+    )
+  )
+
+#— 2. Reproject everything to your chosen CRS
+ohio_boundary_geo   <- st_transform(ohio_boundary,       26917)
+nhd_waterbodies_geo <- st_transform(nhd_waterbodies_ohio,26917)
+nhd_flowline_geo    <- st_transform(nhd_flowline_ohio,   26917)
+ohio_accidents_geo  <- st_transform(ohio_accidents_sf,   26917)
+
+#— 3. Create a palette *including* "Unknown" at the end
+base_levels <- c("Very Low","Low","Medium","High","Very High")
+pal_vals <- viridis(5, option = "D", direction = -1)
+palette_vals <- c(setNames(pal_vals, base_levels),
+                  "Unknown" = "gray50")
+
+#— 4. Tight margins
+par(mar = c(3, 3, 2, 1))
+
+#— 5. Empty base map + title
+plot(
+  st_geometry(ohio_boundary_geo),
+  col      = NA,
+  border   = NA,
+  axes     = FALSE,
+  main     = paste0(
+               "Pipeline Accidents by Environmental Sensitivity in Ohio\n",
+               "Classification based on land use type sensitivity"
+             ),
+  cex.main = 0.8
+)
+
+#— 6. Gridlines & labels
+bbox       <- st_bbox(ohio_boundary_geo)
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_labels <- paste0(abs(round(lon_breaks,2)), "°", ifelse(lon_breaks<0,"W","E"))
+lat_labels <- paste0(abs(round(lat_breaks,2)), "°", ifelse(lat_breaks<0,"S","N"))
+for (x in lon_breaks) abline(v = x, col = "grey90", lty = 2)
+for (y in lat_breaks) abline(h = y, col = "grey90", lty = 2)
+
+#— 7. Draw water & flowlines
+mf_map(nhd_waterbodies_geo, type = "base", col = "lightblue", border = NA, add = TRUE)
+mf_map(nhd_flowline_geo,    type = "base", col = "blue",      lwd    = 1,  add = TRUE)
+
+#— 8. Plot accident points (typology), suppressing mf_map’s legend
+mf_map(
+  ohio_accidents_geo,
+  type    = "typo",
+  var     = "sensitivity",
+  pal     = palette_vals,
+  pch     = 19,
+  cex     = 0.9,
+  add     = TRUE,
+  leg_pos = NA
+)
+
+#— 9. Now draw a clean categorical legend with *exactly* your 6 levels
+mf_legend(
+  type  = "typo",
+  pos   = "right",
+  val   = names(palette_vals),
+  pal   = palette_vals,
+  title = "Environmental\nSensitivity"
+)
+
+#— 10. Overlay the state border
+mf_map(
+  ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 1,
+  add    = TRUE
+)
+
+#— 11. Axes, arrow, scale, box
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+#— Load libraries
+library(sf)
+library(mapsf)
+library(viridisLite)
+
+#— 1. Reproject all layers to geographic CRS (WGS84) for neat axes
+risk_grid_geo      <- st_transform(risk_grid_simple, 4326)
+ohio_boundary_geo  <- st_transform(ohio_boundary,     4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+#— 2. Ensure risk_category is a factor with desired order
+risk_grid_geo$risk_category <- factor(
+  risk_grid_geo$risk_category,
+  levels = c("Very Low","Low","Moderate","High","Very High")
+)
+
+#— 3. Create a reversed Inferno palette matching the levels
+pal_vals <- viridisLite::inferno(length(levels(risk_grid_geo$risk_category)), direction = -1)
+names(pal_vals) <- levels(risk_grid_geo$risk_category)
+
+#— 4. Set tight margins (bottom, left, top, right)
+par(mar = c(3, 3, 2, 1))
+
+#— 5. Empty base plot with title + subtitle
+plot(
+  st_geometry(ohio_boundary_geo),
+  col      = NA,
+  border   = NA,
+  axes     = FALSE,
+  main     = paste0(
+               "Integrated Risk Assessment for Pipeline Accidents in Ohio\n",
+               "Combining accident density, population exposure, and environmental factors"
+             ),
+  cex.main = 0.7
+)
+
+#— 6. Gridlines & lat/long labels
+bbox       <- st_bbox(ohio_boundary_geo)
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_labels <- paste0(abs(round(lon_breaks, 2)), "°", ifelse(lon_breaks < 0, "W", "E"))
+lat_labels <- paste0(abs(round(lat_breaks, 2)), "°", ifelse(lat_breaks < 0, "S", "N"))
+
+for (x in lon_breaks) abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+for (y in lat_breaks) abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+
+#— 7. Choropleth of risk categories (no built-in legend)
+mf_map(
+  x        = risk_grid_geo,
+  type     = "typo",
+  var      = "risk_category",
+  pal      = pal_vals,
+  border   = NA,
+  add      = TRUE,
+  leg_pos  = NA    # suppress the default legend
+)
+
+#— 8. Custom legend showing only the five risk levels
+mf_legend(
+  type  = "typo",
+  pos   = "right",
+  val   = levels(risk_grid_geo$risk_category),
+  pal   = pal_vals,
+  title = "Risk Level"
+)
+
+#— 9. Overlay state boundary for crisp edge
+mf_map(
+  x      = ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 0.5,
+  add    = TRUE
+)
+
+#— 10. Accident points
+mf_map(
+  x      = ohio_accidents_geo,
+  type   = "base",
+  col    = "black",
+  pch    = 19,
+  cex    = 0.5,
+  add    = TRUE
+)
+
+#— 11. Axes, north arrow, scale bar, and frame box
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+```
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+#— Load libraries
+library(sf)
+library(mapsf)
+library(RColorBrewer)
+
+#— 1. Reproject to WGS84 for neat axes
+ohio_boundary_geo   <- st_transform(ohio_boundary,      4326)
+ohio_accidents_geo  <- st_transform(ohio_accidents_sf,  4326)
+
+#— 2. Create a factor for Decade with readable labels
+ohio_accidents_geo$Decade_fac <- factor(
+  ohio_accidents_geo$Decade,
+  levels = c(1980, 1990, 2000, 2010),
+  labels = c("1980s", "1990s", "2000s", "2010s")
+)
+
+#— 3. Palette from ColorBrewer Set1
+pal_set1 <- brewer.pal(n = 4, name = "Set1")
+names(pal_set1) <- levels(ohio_accidents_geo$Decade_fac)
+
+#— 4. Tight margins
+par(mar = c(3, 3, 2, 1))
+
+#— 5. Empty base plot with title
+plot(
+  st_geometry(ohio_boundary_geo),
+  col      = NA,
+  border   = NA,
+  axes     = FALSE,
+  main     = "Pipeline Accidents in Ohio by Decade (1980–2019)",
+  cex.main = 1.2
+)
+
+#— 6. Gridlines & lat/long labels
+bbox       <- st_bbox(ohio_boundary_geo)
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_labels <- paste0(abs(round(lon_breaks,2)), "°", ifelse(lon_breaks<0,"W","E"))
+lat_labels <- paste0(abs(round(lat_breaks,2)), "°", ifelse(lat_breaks<0,"S","N"))
+
+for(x in lon_breaks) abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+for(y in lat_breaks) abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+
+#— 7. Plot accident points by decade (categorical), suppress built‑in legend
+mf_map(
+  x        = ohio_accidents_geo,
+  type     = "typo",
+  var      = "Decade_fac",
+  pal      = pal_set1,
+  pch      = 19,
+  cex      = 0.7,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+#— 8. Custom legend for decades
+mf_legend(
+  type  = "typo",
+  pos   = "right",
+  val   = names(pal_set1),
+  pal   = pal_set1,
+  title = "Decade"
+)
+
+#— 9. Overlay state boundary for crisp edge
+mf_map(
+  x      = ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 1,
+  add    = TRUE
+)
+
+#— 10. Axes, north arrow, scale bar, and frame
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)
+library(mapsf)
+library(viridisLite)
+
+# 1) Reproject everything to WGS84 so axes are in °N/°W
+ohio_counties_geo <- st_transform(ohio_counties_sf, 4326)
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+
+# 2) Compute your gridlines & labels once
+bbox    <- st_bbox(ohio_boundary_geo)
+lon_br  <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_br  <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_lb  <- paste0(abs(round(lon_br,2)), "°", ifelse(lon_br<0,"W","E"))
+lat_lb  <- paste0(abs(round(lat_br,2)), "°", ifelse(lat_br<0,"N","N"))
+
+# 3) Shared Plasma palette
+pal100 <- viridisLite::plasma(100, direction = -1)
+
+# 4) Helper to draw the blank base + grids + title
+draw_base <- function(title) {
+  par(mar = c(3,3,2,1))
+  plot(
+    st_geometry(ohio_boundary_geo),
+    col    = NA,
+    border = NA,
+    axes   = FALSE,
+    main   = title,
+    cex.main = 1.2
+  )
+  for(x in lon_br) abline(v = x, col = "grey90", lty = 2)
+  for(y in lat_br) abline(h = y, col = "grey90", lty = 2)
+}
+
+# 5) Helper to overlay boundary, axes, arrow, scale & box
+add_axes <- function() {
+  mf_map(
+    x      = ohio_boundary_geo,
+    type   = "base",
+    col    = NA,
+    border = "black",
+    add    = TRUE
+  )
+  axis(1, at = lon_br, labels = lon_lb, cex.axis = 0.7)
+  axis(2, at = lat_br, labels = lat_lb, cex.axis = 0.7)
+  mf_arrow(pos = "topleft")
+  mf_scale(pos = "bottomleft")
+  box()
+}
+
+#–– Map 1: Accident counts ––
+draw_base("Pipeline Accidents by County in Ohio")
+
+# Create quantile breaks for accident count - fixed approach
+count_values <- ohio_counties_geo$accident_count
+# For quantiles, we'll use the stats::quantile function
+count_breaks <- c(
+  0,  # start at 0
+  stats::quantile(
+    count_values[count_values > 0],  # skip zeros for better breaks
+    probs = seq(0.2, 0.8, by = 0.2)
+  ),
+  max(count_values)  # end at max value
+)
+
+# Create a custom color palette with 7 colors (for 6 intervals)
+count_pal <- pal100[seq(1, 100, length.out = length(count_breaks) - 1)]
+
+mf_map(
+  x        = ohio_counties_geo,
+  type     = "choro",
+  var      = "accident_count",
+  breaks   = count_breaks,
+  pal      = count_pal,
+  border   = "grey70",
+  lwd      = 0.4,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+# Custom legend
+mf_legend(
+  type   = "choro",
+  pos    = "right",
+  title  = "Number of\nAccidents",
+  val    = count_breaks,
+  pal    = count_pal,
+  frame  = TRUE
+)
+add_axes()
+
+#–– Map 2: Accident rate per 1000 km² ––
+draw_base("Pipeline Accident Rate by County in Ohio")
+
+# Create quantile breaks for accident rate
+rate_values <- ohio_counties_geo$accident_rate
+rate_breaks <- c(
+  0,  # start at 0
+  stats::quantile(
+    rate_values[rate_values > 0],  # skip zeros for better breaks
+    probs = seq(0.2, 0.8, by = 0.2)
+  ),
+  max(rate_values)  # end at max value
+)
+
+# Create a custom color palette
+rate_pal <- pal100[seq(1, 100, length.out = length(rate_breaks) - 1)]
+
+mf_map(
+  x        = ohio_counties_geo,
+  type     = "choro",
+  var      = "accident_rate",
+  breaks   = rate_breaks,
+  pal      = rate_pal,
+  border   = "grey70",
+  lwd      = 0.4,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+mf_legend(
+  type   = "choro",
+  pos    = "right",
+  title  = "Accidents per\n1000 sq km",
+  val    = rate_breaks,
+  pal    = rate_pal,
+  frame  = TRUE
+)
+add_axes()
+
+#–– Map 3: Population-weighted risk per 100,000 people ––
+draw_base("Population-Weighted Pipeline Accident Risk by County")
+
+# Create quantile breaks for population risk
+risk_values <- ohio_counties_geo$pop_risk
+risk_breaks <- c(
+  0,  # start at 0
+  stats::quantile(
+    risk_values[risk_values > 0],  # skip zeros for better breaks
+    probs = seq(0.2, 0.8, by = 0.2)
+  ),
+  max(risk_values)  # end at max value
+)
+
+# Create a custom color palette
+risk_pal <- pal100[seq(1, 100, length.out = length(risk_breaks) - 1)]
+
+mf_map(
+  x        = ohio_counties_geo,
+  type     = "choro",
+  var      = "pop_risk",
+  breaks   = risk_breaks,
+  pal      = risk_pal,
+  border   = "grey70",
+  lwd      = 0.4,
+  add      = TRUE,
+  leg_pos  = NA
+)
+
+mf_legend(
+  type   = "choro",
+  pos    = "right",
+  title  = "Accidents per\n100,000 people",
+  val    = risk_breaks,
+  pal    = risk_pal,
+  frame  = TRUE
+)
+add_axes()
+```
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+#— Load libraries
+library(sf)
+library(mapsf)
+library(terra)
+library(viridisLite)
+
+#— 1. Reproject to geographic CRS (WGS84) for axes
+thiessen_geo       <- st_transform(thiessen_service_areas, 4326)
+ohio_boundary_geo  <- st_transform(ohio_boundary,          4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf,      4326)
+
+#— 2. Build a template raster over Ohio at higher resolution (0.01°) for better quality
+bbox     <- st_bbox(ohio_boundary_geo)  # Use Ohio boundary for complete coverage
+template <- rast(
+  xmin       = bbox["xmin"], xmax = bbox["xmax"],
+  ymin       = bbox["ymin"], ymax = bbox["ymax"],
+  resolution = 0.01,  # Higher resolution than before
+  crs        = "EPSG:4326"
+)
+
+#— 3. Rasterize the Thiessen polygon areas
+area_rast <- rasterize(
+  vect(thiessen_geo),
+  template,
+  field = "area_sq_km"
+)
+
+#— 4. Plot setup: no margins around
+par(mar = c(3,3,2,1))
+plot(
+  st_geometry(ohio_boundary_geo),
+  col    = NA,
+  border = NA,
+  axes   = FALSE,
+  main   = paste0(
+    "Pipeline Accident Service Areas in Ohio\n",
+    "Thiessen Polygons by Size"
+  ),
+  cex.main = 1.2
+)
+
+#— 5. Add gridlines & lat/long labels
+lon_br <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_br <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+lon_lb <- paste0(abs(round(lon_br,2)), "°", ifelse(lon_br<0,"W","E"))
+lat_lb <- paste0(abs(round(lat_br,2)), "°", ifelse(lat_br<0,"S","N"))
+for (x in lon_br) abline(v = x, col = "grey90", lty = 2)
+for (y in lat_br) abline(h = y, col = "grey90", lty = 2)
+
+#— 6. Continuous raster layer with reversed plasma palette
+mf_raster(
+  x       = area_rast,
+  pal     = viridisLite::plasma(100, direction = -1),
+  nbreaks = 100,
+  add     = TRUE,
+  leg_pos = NA    # suppress default legend
+)
+
+#— 7. Custom continuous legend with ticks at 2000, 4000, 6000
+mf_legend(
+  type   = "cont",
+  pos    = "right",
+  title  = "Service Area (sq km)",
+  val    = c(2000, 4000, 6000),
+  pal    = viridisLite::plasma(100, direction = -1)
+)
+
+#— 8. Overlay polygon boundaries for sharpness
+mf_map(
+  x      = thiessen_geo,
+  type   = "base",
+  col    = NA,  # No fill, just boundaries
+  border = "black",
+  lwd    = 0.2,
+  add    = TRUE
+)
+
+#— 9. Overlay boundary & accident locations
+mf_map(
+  x      = ohio_boundary_geo,
+  type   = "base",
+  col    = NA,
+  border = "black",
+  lwd    = 0.5,
+  add    = TRUE
+)
+mf_map(
+  x      = ohio_accidents_geo,
+  type   = "base",
+  col    = "red",
+  pch    = 19,
+  cex    = 0.6,
+  add    = TRUE
+)
+
+#— 10. Add axes, north arrow, scale bar, and frame
+axis(1, at = lon_br, labels = lon_lb, cex.axis = 0.7)
+axis(2, at = lat_br, labels = lat_lb, cex.axis = 0.7)
+mf_arrow(pos = "topleft")
+mf_scale(pos = "bottomleft")
+box()
+
+```
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+# Create a summary data frame for commodity analysis
+commodity_summary <- data.frame(
+  Commodity = names(sort(table(ohio_accidents_sf$Commodity), decreasing = TRUE)),
+  Count = as.numeric(sort(table(ohio_accidents_sf$Commodity), decreasing = TRUE)),
+  Percentage = as.numeric(sort(table(ohio_accidents_sf$Commodity), decreasing = TRUE)) / nrow(ohio_accidents_sf) * 100
+)
+
+# Add a more generalized classification
+commodity_summary$Category <- "Other"
+commodity_summary$Category[commodity_summary$Commodity %in% c("OIL", "GASOLINE", "DIESEL", "JET FUEL")] <- "Refined Petroleum"
+commodity_summary$Category[commodity_summary$Commodity %in% c("NATURAL GAS LIQUID", "LIQUIFIED GASES", "PROPANE")] <- "Gas/LNG"
+commodity_summary$Category[commodity_summary$Commodity == ""] <- "Unknown"
+
+# Add the commodity type to our accidents data for mapping
+ohio_accidents_sf$commodity_category <- "Other"
+ohio_accidents_sf$commodity_category[ohio_accidents_sf$Commodity %in% c("OIL", "GASOLINE", "DIESEL", "JET FUEL")] <- "Refined Petroleum"
+ohio_accidents_sf$commodity_category[ohio_accidents_sf$Commodity %in% c("NATURAL GAS LIQUID", "LIQUIFIED GASES", "PROPANE")] <- "Gas/LNG"
+ohio_accidents_sf$commodity_category[ohio_accidents_sf$Commodity == ""] <- "Unknown"
+
+# Create a bar chart of commodity types
+# Transform to geographic coordinates for mapping
+ohio_boundary_geo <- st_transform(ohio_boundary, 4326)
+ohio_accidents_geo <- st_transform(ohio_accidents_sf, 4326)
+
+# Set up the plotting area for the bar chart
+par(mar = c(6, 8, 2, 2))
+
+# Filter out empty commodity values for the plot
+commodity_plot <- commodity_summary[commodity_summary$Commodity != "", ]
+
+# Create barplot with commodity types
+barplot(commodity_plot$Count,
+        names.arg = commodity_plot$Commodity,
+        horiz = TRUE,
+        col = "steelblue",
+        las = 1,
+        cex.names = 0.8,
+        main = "Pipeline Accidents by Commodity Type in Ohio",
+        xlab = "Number of Accidents")
+
+# Add percentages as text
+text(commodity_plot$Count + max(commodity_plot$Count)/20, 
+     seq(1.5, by = 1.2, length.out = nrow(commodity_plot)) - 0.5,
+     paste0(round(commodity_plot$Percentage, 1), "%"),
+     cex = 0.7)
+
+# Create a map showing accidents by commodity type
+# Reset plotting parameters
+par(mar = c(3, 3, 2, 1))
+
+# Create empty plot with Ohio's extent
+plot(st_geometry(ohio_boundary_geo),
+     col = NA, 
+     border = NA,
+     axes = FALSE,
+     main = "Pipeline Accidents by Commodity Type in Ohio")
+
+# Get the bounding box for grid lines
+bbox <- st_bbox(ohio_boundary_geo)
+
+# Create latitude and longitude breaks
+lon_breaks <- seq(bbox["xmin"], bbox["xmax"], length.out = 5)
+lat_breaks <- seq(bbox["ymin"], bbox["ymax"], length.out = 5)
+
+# Format lat/long labels
+lon_labels <- paste0(round(lon_breaks, 2), "° W")
+lat_labels <- paste0(round(lat_breaks, 2), "° N")
+
+# Add grid lines
+for(x in lon_breaks) {
+  abline(v = x, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+for(y in lat_breaks) {
+  abline(h = y, col = "grey90", lwd = 0.5, lty = 2)
+}
+
+# Add Ohio fill
+plot(st_geometry(ohio_boundary_geo),
+     col = "white",
+     border = NA,
+     add = TRUE)
+
+# Create colors for commodity categories
+commodity_colors <- c("Refined Petroleum" = "red", "Gas/LNG" = "blue", "Unknown" = "gray", "Other" = "green")
+
+# Assign colors based on commodity categories
+point_colors <- commodity_colors[ohio_accidents_geo$commodity_category]
+
+# Plot accident points colored by commodity
+plot(st_geometry(ohio_accidents_geo),
+     col = point_colors,
+     pch = 16,
+     cex = 1,
+     add = TRUE)
+
+# Add Ohio boundary
+plot(st_geometry(ohio_boundary_geo),
+     col = NA,
+     border = "black",
+     add = TRUE)
+
+# Add manual axes with lat/long labels
+axis(1, at = lon_breaks, labels = lon_labels, cex.axis = 0.7)
+axis(2, at = lat_breaks, labels = lat_labels, cex.axis = 0.7)
+
+# Add north arrow
+mf_arrow(pos = "topleft", col = "black")
+
+# Add scale bar
+mf_scale(pos = "bottomleft")
+
+# Add box around the plot area
+box()
+
+# Add legend
+legend("bottomright", 
+       legend = names(commodity_colors),
+       col = commodity_colors,
+       pch = 16,
+       bty = "n",
+       cex = 0.8,
+       title = "Commodity Type")
+
+# Temporal analysis - Look at commodity types over time
+# Set up the plotting area
+par(mar = c(4, 4, 2, 1))
+
+# Create a heatmap-style visualization of commodity types by decade
+decade_commodity <- table(ohio_accidents_sf$Decade, ohio_accidents_sf$Commodity)
+
+# Calculate the percentage within each decade
+decade_commodity_pct <- prop.table(decade_commodity, margin = 1) * 100
+
+# Convert to data frame for plotting
+decade_commodity_df <- as.data.frame.matrix(decade_commodity)
+decade_commodity_pct_df <- as.data.frame.matrix(decade_commodity_pct)
+
+# Print the results
+print("Commodity types by decade (count):")
+print(decade_commodity)
+
+print("Commodity types by decade (percentage within decade):")
+print(round(decade_commodity_pct, 1))
+
+# Calculate average age of pipeline by commodity type
+avg_age_by_commodity <- aggregate(Age..yrs. ~ Commodity, 
+                                 data = st_drop_geometry(ohio_accidents_sf), 
+                                 FUN = function(x) mean(x, na.rm = TRUE))
+
+# Order by average age
+avg_age_by_commodity <- avg_age_by_commodity[order(-avg_age_by_commodity$Age..yrs.), ]
+
+# Print the results
+print("Average pipeline age at time of accident by commodity type:")
+print(avg_age_by_commodity)
+```
+
+
+
+
+```{r}
+# I created this map to explore the spatial patterns in the data.
+
+library(sf)
+library(terra)
+library(FedData)
+
+ohio_boundary <- states(cb = TRUE, year = 2021) %>%
+  dplyr::filter(STUSPS == "OH") %>%  # fully qualified
+  st_transform(4326)
+
+
+
+# 2. Download NLCD land‑cover raster for 2016 via FedData API
+nlcd_api_raster <- get_nlcd(
+  template       = ohio_boundary,
+  year           = 2016,
+  dataset        = "landcover",
+  label          = "nlcd_api_ohio",
+  extraction.dir = "~/Assignment/nlcd_api_download",
+  force.redo     = FALSE
+)
+
+# 3. Reproject the raster to NAD83 / UTM zone 17N (EPSG:26917)
+nlcd_26917 <- project(nlcd_api_raster, "EPSG:26917")
+
+# 4. Reproject Ohio boundary to EPSG:26917
+ohio_boundary_26917 <- st_transform(ohio_boundary, 26917)
+
+# 5. Convert the boundary to a terra SpatVector for masking
+ohio_vect_26917 <- vect(ohio_boundary_26917)
+
+# 6. Crop and mask the reprojected raster to the Ohio extent
+nlcd_clipped <- crop(nlcd_26917, ohio_vect_26917)
+nlcd_clipped <- mask(nlcd_clipped, ohio_vect_26917)
+
+# 7. Plot without axes or box
+plot(nlcd_clipped,
+     main = "Classified Land Cover Land Use Map of Ohio",
+     axes = FALSE)          # suppress axes and box
+plot(st_geometry(ohio_boundary_26917),
+     add    = TRUE,
+     border = "black")     # overlay the state boundary
+```
+
+
+
